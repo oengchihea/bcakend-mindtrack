@@ -2,8 +2,9 @@ from flask import Blueprint, request, jsonify, current_app
 import uuid
 import re
 import requests
-from datetime import datetime
+from datetime import datetime, date
 import json
+import time
 
 mood_bp = Blueprint('mood', __name__, url_prefix='/api')
 
@@ -11,17 +12,14 @@ mood_bp = Blueprint('mood', __name__, url_prefix='/api')
 uuid_regex = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
 
 def verify_token(token):
-    """Verify Supabase JWT token and return user_id using Supabase client."""
+    """Verify Supabase JWT token."""
     try:
         response = current_app.supabase.auth.get_user(token)
         if not response or not response.user:
-            print(f'Token verification failed: No user data in response')
             return None
         user_id = response.user.id
         if not user_id or not uuid_regex.match(user_id):
-            print(f'Invalid user_id in token response: {user_id}')
             return None
-        print(f'Token verified successfully for user_id: {user_id}')
         return user_id
     except Exception as e:
         print(f'Token verification error: {str(e)}')
@@ -42,614 +40,611 @@ def create_authenticated_supabase_client(token):
     
     return client
 
-def convert_questionnaire_to_analyze_data_format(content, questionnaire_data):
-    """Convert questionnaire data to the format expected by your /api/analyze-data endpoint."""
+def create_enhanced_analysis_prompt(content, questionnaire_data):
+    """Create a comprehensive prompt for AI analysis with questions and answers."""
     
-    # Extract relevant data from questionnaire
-    user_data = {}
-    
-    # Map common questionnaire fields to your analyze-data API format
-    if questionnaire_data:
-        # Feeling scale (1-10)
-        if 'feeling_scale' in questionnaire_data:
-            user_data['feeling'] = str(questionnaire_data['feeling_scale'])
-        elif 'feeling' in questionnaire_data:
-            user_data['feeling'] = str(questionnaire_data['feeling'])
-        elif 'mood_scale' in questionnaire_data:
-            user_data['feeling'] = str(questionnaire_data['mood_scale'])
-        else:
-            # Try to extract a number from content or default to 5
-            user_data['feeling'] = str(extract_number_from_content(content) or 5)
-        
-        # Mood word
-        if 'mood_word' in questionnaire_data:
-            user_data['moodWord'] = str(questionnaire_data['mood_word'])
-        elif 'mood' in questionnaire_data:
-            user_data['moodWord'] = str(questionnaire_data['mood'])
-        else:
-            user_data['moodWord'] = extract_mood_word_from_content(content)
-        
-        # Positive experience
-        if 'positive_experience' in questionnaire_data:
-            user_data['positiveExperience'] = str(questionnaire_data['positive_experience'])
-        elif 'good_things' in questionnaire_data:
-            user_data['positiveExperience'] = str(questionnaire_data['good_things'])
-        else:
-            user_data['positiveExperience'] = extract_positive_from_content(content)
-        
-        # Affecting factors (negative factors)
-        if 'negative_factors' in questionnaire_data:
-            user_data['affectingFactor'] = str(questionnaire_data['negative_factors'])
-        elif 'affecting_factors' in questionnaire_data:
-            user_data['affectingFactor'] = str(questionnaire_data['affecting_factors'])
-        elif 'stress_factors' in questionnaire_data:
-            user_data['affectingFactor'] = str(questionnaire_data['stress_factors'])
-        else:
-            user_data['affectingFactor'] = extract_challenges_from_content(content)
-    else:
-        # No questionnaire data, extract from content
-        user_data = {
-            'feeling': str(extract_number_from_content(content) or 5),
-            'moodWord': extract_mood_word_from_content(content),
-            'positiveExperience': extract_positive_from_content(content),
-            'affectingFactor': extract_challenges_from_content(content)
-        }
-    
-    return user_data
+    prompt = f"""
+Please analyze this person's mood and mental state based on their journal entry and detailed questionnaire responses.
 
-def extract_number_from_content(content):
-    """Extract a number (1-10) from content for mood scale."""
-    import re
-    
-    # Look for patterns like "feeling 7/10", "mood is 8", "rate it 6"
-    patterns = [
-        r'(?:feeling|mood|rate|score).*?(\d+)(?:/10|out of 10)?',
-        r'(\d+)(?:/10|out of 10)',
-        r'(\d+)\s*(?:out of|/)\s*10'
-    ]
-    
-    for pattern in patterns:
-        match = re.search(pattern, content.lower())
-        if match:
-            num = int(match.group(1))
-            if 1 <= num <= 10:
-                return num
-    
-    return None
+JOURNAL ENTRY:
+"{content}"
 
-def extract_mood_word_from_content(content):
-    """Extract mood words from content."""
-    content_lower = content.lower()
-    
-    mood_words = [
-        'happy', 'sad', 'angry', 'anxious', 'excited', 'depressed', 'joyful',
-        'frustrated', 'calm', 'stressed', 'content', 'worried', 'peaceful',
-        'overwhelmed', 'grateful', 'lonely', 'confident', 'tired', 'energetic'
-    ]
-    
-    found_words = []
-    for word in mood_words:
-        if word in content_lower:
-            found_words.append(word)
-    
-    return ', '.join(found_words) if found_words else 'neutral'
+QUESTIONNAIRE RESPONSES:
+"""
 
-def extract_positive_from_content(content):
-    """Extract positive experiences from content."""
-    content_lower = content.lower()
+    if questionnaire_data and 'questionnaire_responses' in questionnaire_data:
+        for response in questionnaire_data['questionnaire_responses']:
+            prompt += f"""
+Q: {response['question']}
+A: {response['user_response']}
+"""
     
-    positive_indicators = [
-        'accomplished', 'achieved', 'success', 'good', 'great', 'wonderful',
-        'amazing', 'fantastic', 'excellent', 'proud', 'grateful', 'thankful'
-    ]
-    
-    for indicator in positive_indicators:
-        if indicator in content_lower:
-            # Try to extract the sentence containing the positive word
-            sentences = content.split('.')
-            for sentence in sentences:
-                if indicator in sentence.lower():
-                    return sentence.strip()
-    
-    return "None provided"
+    prompt += f"""
 
-def extract_challenges_from_content(content):
-    """Extract challenges or negative factors from content."""
-    content_lower = content.lower()
-    
-    challenge_indicators = [
-        'stress', 'problem', 'issue', 'difficult', 'hard', 'struggle',
-        'challenge', 'worry', 'concern', 'trouble', 'upset', 'frustrated'
-    ]
-    
-    for indicator in challenge_indicators:
-        if indicator in content_lower:
-            # Try to extract the sentence containing the challenge
-            sentences = content.split('.')
-            for sentence in sentences:
-                if indicator in sentence.lower():
-                    return sentence.strip()
-    
-    return "None provided"
+ANALYSIS INSTRUCTIONS:
+1. Provide a mood score from 0-10 (where 0 is extremely negative, 5 is neutral, 10 is extremely positive)
+2. Select an appropriate emoji that reflects their emotional state
+3. Write personalized insights that reference specific answers from their questionnaire
+4. Provide 4 actionable suggestions based on their specific situation
+5. Identify key themes from their responses
+6. Consider the relationship between their journal entry and questionnaire answers
 
-def call_analyze_data_api(content, questionnaire_data=None, max_retries=2):
-    """Call your existing /api/analyze-data endpoint with improved data mapping."""
+IMPORTANT: Ensure the score varies based on the actual responses. Don't default to neutral (5) unless the responses truly indicate neutrality.
+
+Please respond in this exact JSON format:
+{{
+    "score": [number between 0-10],
+    "emoji": "[single emoji character]",
+    "sentiment": "[very negative/negative/neutral/positive/very positive]",
+    "insights": "[2-3 sentences of personalized insights referencing their specific answers]",
+    "suggestions": [
+        "[specific suggestion based on their responses]",
+        "[specific suggestion based on their responses]", 
+        "[specific suggestion based on their responses]",
+        "[specific suggestion based on their responses]"
+    ],
+    "themes": ["[theme1]", "[theme2]", "[theme3]"],
+    "confidence": [number between 0-1]
+}}
+"""
     
-    print(f'Calling analyze-data API with content: {content[:100]}...')
-    print(f'Questionnaire data: {questionnaire_data}')
+    return prompt
+
+def call_enhanced_analyze_api(content, questionnaire_data=None, max_retries=2):
+    """Call AI analysis API with enhanced prompt including questions and answers."""
     
-    # Convert data to the format expected by your analyze-data API
-    user_data = convert_questionnaire_to_analyze_data_format(content, questionnaire_data)
-    
-    # Add the original content to provide more context
-    user_data['originalContent'] = content
+    print(f'Calling enhanced analyze API with structured questionnaire data')
     
     for attempt in range(max_retries):
         try:
-            print(f'Attempt {attempt + 1}/{max_retries} - Calling analyze-data API')
+            # Create enhanced prompt with questions and answers
+            analysis_prompt = create_enhanced_analysis_prompt(content, questionnaire_data)
             
             payload = {
-                'userData': user_data,
-                'analysisType': 'comprehensive-mood',  # Changed to comprehensive for better analysis
-                'includeContext': True,  # Request more contextual analysis
-                'requestId': str(uuid.uuid4())  # Add request tracking
+                'prompt': analysis_prompt,
+                'content': content,
+                'questionnaire_data': questionnaire_data,
+                'analysis_type': 'comprehensive_with_context',
+                'include_questions': True,
+                'requestId': str(uuid.uuid4())
             }
             
-            print(f'Sending enhanced payload: {json.dumps(payload, indent=2)}')
+            print(f'Sending enhanced payload with {len(questionnaire_data.get("questionnaire_responses", []))} questionnaire responses')
             
             response = requests.post(
                 'https://ai-mindtrack.vercel.app/api/analyze-data',
                 json=payload,
                 headers={
                     'Content-Type': 'application/json',
-                    'User-Agent': 'MindTrack-Flask/2.0',
-                    'Accept': 'application/json',
-                    'X-Request-Source': 'flask-backend'
+                    'User-Agent': 'MindTrack-Enhanced/1.0',
                 },
-                timeout=60  # Increased timeout for better analysis
+                timeout=30
             )
             
-            print(f'Analyze-data API Response Status: {response.status_code}')
-            print(f'Analyze-data API Response Headers: {dict(response.headers)}')
+            print(f'Enhanced API Response Status: {response.status_code}')
             
             if response.status_code == 200:
-                try:
-                    result = response.json()
-                    print(f'Analyze-data API Response: {json.dumps(result, indent=2)}')
+                result = response.json()
+                if 'analysis' in result:
+                    analysis = result['analysis']
+                    # Add source information
+                    analysis['source'] = 'enhanced-ai-analysis'
+                    analysis['questionnaire_context'] = True
+                    print(f'Enhanced AI analysis: Score {analysis.get("score")}, Emoji {analysis.get("emoji")}')
+                    return analysis
                     
-                    # Extract analysis from the response
-                    if 'analysis' in result:
-                        analysis = result['analysis']
-                        
-                        # Validate that analysis has required fields
-                        required_fields = ['score', 'insights']
-                        missing_fields = [field for field in required_fields if field not in analysis]
-                        
-                        if missing_fields:
-                            print(f'Analysis missing required fields: {missing_fields}')
-                            continue
-                        
-                        # Convert response to your expected format with enhanced processing
-                        converted_analysis = convert_analyze_data_response_enhanced(analysis, user_data, content)
-                        return converted_analysis
-                    else:
-                        print('No analysis field in response')
-                        print(f'Available fields: {list(result.keys())}')
-                        continue
-                        
-                except json.JSONDecodeError as e:
-                    print(f'Failed to parse JSON response: {str(e)}')
-                    print(f'Raw response: {response.text[:500]}...')
-                    continue
-                    
-            else:
-                print(f'Analyze-data API Error Response ({response.status_code}): {response.text}')
-                
-                # If it's a server error, try again
-                if response.status_code >= 500:
-                    continue
-                else:
-                    # Client error, don't retry
-                    break
-                
-        except requests.exceptions.Timeout:
-            print(f'Timeout calling analyze-data API (attempt {attempt + 1})')
-            continue
-            
-        except requests.exceptions.ConnectionError as e:
-            print(f'Connection error calling analyze-data API: {str(e)}')
-            continue
-            
-        except requests.exceptions.RequestException as e:
-            print(f'Request error calling analyze-data API: {str(e)}')
-            continue
-            
         except Exception as e:
-            print(f'Unexpected error calling analyze-data API: {str(e)}')
-            import traceback
-            traceback.print_exc()
+            print(f'Enhanced API call failed (attempt {attempt + 1}): {str(e)}')
             continue
     
-    print(f'All analyze-data API attempts failed after {max_retries} retries')
+    print('Enhanced API analysis failed, falling back to local analysis')
     return None
 
-def convert_analyze_data_response_enhanced(analysis, user_data, original_content):
-    """Enhanced conversion of analyze-data API response with better context understanding."""
+def analyze_with_enhanced_variation(content, mood, questionnaire_data=None):
+    """Enhanced local analysis that ensures varied outputs based on inputs."""
     
-    # Map emoji text to actual emojis with more options
-    emoji_map = {
-        'sad': '😔',
-        'slightly_sad': '😕',
-        'neutral': '😐',
-        'slightly_happy': '🙂',
-        'happy': '😊',
-        'very_happy': '😄',
-        'very_sad': '😢',
-        'anxious': '😰',
-        'calm': '😌',
-        'excited': '🤗',
-        'angry': '😡',
-        'frustrated': '😤',
-        'content': '😊',
-        'peaceful': '😌'
-    }
+    print(f'=== ENHANCED VARIATION ANALYSIS ===')
+    print(f'Content: {content[:100]}...')
+    print(f'Mood: {mood}')
+    print(f'Questionnaire responses: {len(questionnaire_data.get("questionnaire_responses", []))}')
     
-    # Get score and ensure it's valid
-    score = analysis.get('score', 3)
-    try:
-        score = float(score)
-        if score < 1 or score > 5:
-            score = 3  # Default to neutral
-    except (ValueError, TypeError):
-        score = 3
-    
-    # Convert score (1-5) to (0-10) scale with better mapping
-    normalized_score = min(10, max(0, round((score - 1) * 2.5, 1)))
-    
-    # Enhanced sentiment mapping
-    sentiment_map = {
-        1: 'very negative',
-        1.5: 'very negative',
-        2: 'negative', 
-        2.5: 'negative',
-        3: 'neutral',
-        3.5: 'neutral',
-        4: 'positive',
-        4.5: 'positive',
-        5: 'very positive'
-    }
-    
-    # Get insights and enhance them with context
-    original_insights = analysis.get('insights', 'Mood analysis completed successfully.')
-    enhanced_insights = enhance_insights_with_context(original_insights, user_data, original_content)
-    
-    # Generate contextual suggestions
-    suggestions = generate_contextual_suggestions(score, user_data, original_content, analysis)
-    
-    # Get emoji from analysis or map from score and content
-    emoji = analysis.get('emoji', 'neutral')
-    if emoji in emoji_map:
-        emoji = emoji_map[emoji]
-    else:
-        # Enhanced emoji selection based on content and score
-        emoji = select_contextual_emoji(score, original_content, user_data)
-    
-    # Extract themes from content and analysis
-    themes = extract_themes_from_content(original_content, analysis)
-    
-    converted = {
-        'mood': user_data.get('moodWord', 'neutral'),
-        'sentiment': sentiment_map.get(score, 'neutral'),
-        'score': normalized_score,
-        'insights': enhanced_insights,
-        'suggestions': suggestions,
-        'emoji': emoji,
-        'themes': themes,
-        'confidence': analysis.get('confidence', 0.85),
-        'apiError': False,
-        'timestamp': datetime.utcnow().isoformat(),
-        'source': 'analyze-data-enhanced',
-        'context': {
-            'originalScore': score,
-            'hasQuestionnaireData': bool(user_data.get('feeling') != '5'),
-            'contentLength': len(original_content),
-            'moodWords': user_data.get('moodWord', 'neutral')
-        }
-    }
-    
-    print(f'Enhanced converted analysis: {json.dumps(converted, indent=2)}')
-    return converted
-
-def enhance_insights_with_context(original_insights, user_data, content):
-    """Enhance insights with more context and personalization."""
-    
-    # If insights are too generic, make them more specific
-    if len(original_insights) < 50 or 'analysis completed' in original_insights.lower():
-        mood_word = user_data.get('moodWord', 'neutral')
-        feeling_scale = user_data.get('feeling', '5')
-        
-        # Create more personalized insights
-        if mood_word != 'neutral' and mood_word:
-            if int(feeling_scale) >= 7:
-                enhanced = f"You're experiencing {mood_word} emotions, which is wonderful to see. Your mood rating of {feeling_scale}/10 suggests you're in a positive emotional space."
-            elif int(feeling_scale) <= 3:
-                enhanced = f"I notice you're feeling {mood_word} with a mood rating of {feeling_scale}/10. It's important to acknowledge these difficult feelings and be gentle with yourself."
-            else:
-                enhanced = f"Your mood appears to be {mood_word} with a rating of {feeling_scale}/10. This suggests you're experiencing some mixed emotions, which is completely normal."
-        else:
-            enhanced = f"Based on your entry, your mood seems relatively balanced with a rating of {feeling_scale}/10. Continue monitoring your emotional patterns."
-        
-        return enhanced
-    
-    # If insights are good but could be shorter
-    if len(original_insights) > 250:
-        sentences = original_insights.split('.')
-        # Take first 2 meaningful sentences
-        short_insights = []
-        for sentence in sentences[:3]:
-            sentence = sentence.strip()
-            if sentence and len(sentence) > 15:
-                short_insights.append(sentence)
-            if len(short_insights) == 2:
-                break
-        
-        result = '. '.join(short_insights)
-        if result and not result.endswith('.'):
-            result += '.'
-        return result or original_insights
-    
-    return original_insights
-
-def generate_contextual_suggestions(score, user_data, content, analysis):
-    """Generate more contextual and specific suggestions."""
-    
-    mood_word = user_data.get('moodWord', 'neutral').lower()
-    feeling_scale = int(user_data.get('feeling', '5'))
-    positive_exp = user_data.get('positiveExperience', '').lower()
-    affecting_factor = user_data.get('affectingFactor', '').lower()
-    
-    suggestions = []
-    
-    # Base suggestions on feeling scale
-    if feeling_scale >= 8:  # Very positive
-        suggestions = [
-            f"Continue engaging in activities that contribute to your {mood_word} mood",
-            "Share your positive energy with friends or family",
-            "Reflect on what specifically is working well in your life right now",
-            "Consider journaling about this positive experience for future reference"
-        ]
-    elif feeling_scale >= 6:  # Moderately positive
-        suggestions = [
-            f"Build on your current {mood_word} feelings with activities you enjoy",
-            "Practice gratitude for the positive aspects of your day",
-            "Connect with supportive people in your life",
-            "Maintain the habits that are contributing to your well-being"
-        ]
-    elif feeling_scale >= 4:  # Neutral
-        suggestions = [
-            "Consider engaging in activities that typically boost your mood",
-            "Take a moment to check in with yourself and your needs",
-            "Try a small act of self-care or kindness",
-            "Reach out to someone you care about"
-        ]
-    elif feeling_scale >= 2:  # Low mood
-        suggestions = [
-            f"Be extra gentle with yourself while experiencing {mood_word} feelings",
-            "Try a grounding technique like deep breathing or mindfulness",
-            "Consider reaching out to a trusted friend or family member",
-            "Engage in a small, comforting activity that usually helps"
-        ]
-    else:  # Very low mood
-        suggestions = [
-            "Please be very compassionate with yourself during this difficult time",
-            "Consider speaking with a mental health professional if you haven't already",
-            "Try gentle self-care activities like a warm bath or listening to calming music",
-            "Remember that difficult feelings are temporary and you're not alone"
-        ]
-    
-    # Add specific suggestions based on affecting factors
-    if 'stress' in affecting_factor or 'work' in affecting_factor:
-        suggestions.append("Consider stress-reduction techniques like short breaks or time management strategies")
-    elif 'relationship' in affecting_factor or 'family' in affecting_factor:
-        suggestions.append("Think about healthy communication strategies for your relationships")
-    elif 'health' in affecting_factor or 'sleep' in affecting_factor:
-        suggestions.append("Focus on basic self-care like adequate sleep, nutrition, and gentle movement")
-    
-    # Add suggestions based on positive experiences
-    if 'exercise' in positive_exp or 'workout' in positive_exp:
-        suggestions.append("Continue incorporating physical activity that you enjoy")
-    elif 'friend' in positive_exp or 'social' in positive_exp:
-        suggestions.append("Keep nurturing your social connections and relationships")
-    
-    return suggestions[:4]  # Limit to 4 suggestions
-
-def select_contextual_emoji(score, content, user_data):
-    """Select emoji based on multiple factors."""
-    
-    content_lower = content.lower()
-    mood_word = user_data.get('moodWord', '').lower()
-    
-    # Specific mood word mapping
-    mood_emoji_map = {
-        'happy': '😊',
-        'excited': '🤗',
-        'joyful': '😄',
-        'sad': '😔',
-        'depressed': '😢',
-        'anxious': '😰',
-        'worried': '😟',
-        'angry': '😡',
-        'frustrated': '😤',
-        'calm': '😌',
-        'peaceful': '😌',
-        'content': '🙂',
-        'grateful': '😊',
-        'stressed': '😰',
-        'overwhelmed': '😵',
-        'tired': '😴',
-        'energetic': '⚡'
-    }
-    
-    # Check for specific mood words first
-    for mood, emoji in mood_emoji_map.items():
-        if mood in mood_word:
-            return emoji
-    
-    # Fall back to score-based selection
-    if score >= 4.5:
-        return '😄'
-    elif score >= 3.5:
-        return '😊'
-    elif score >= 2.5:
-        return '🙂'
-    elif score >= 1.5:
-        return '😐'
-    elif score >= 1:
-        return '😕'
-    else:
-        return '😔'
-
-def extract_themes_from_content(content, analysis):
-    """Extract emotional and situational themes from content."""
-    
-    content_lower = content.lower()
+    # Initialize scoring system
+    base_score = 5.0  # Start neutral
+    score_adjustments = []
+    confidence = 0.8
     themes = []
+    positive_indicators = []
+    areas_of_concern = []
     
-    # Emotional themes
-    if any(word in content_lower for word in ['stress', 'pressure', 'overwhelm']):
-        themes.append('stress')
-    if any(word in content_lower for word in ['grateful', 'thankful', 'appreciate']):
-        themes.append('gratitude')
-    if any(word in content_lower for word in ['relationship', 'friend', 'family', 'partner']):
-        themes.append('relationships')
-    if any(word in content_lower for word in ['work', 'job', 'career', 'office']):
-        themes.append('work')
-    if any(word in content_lower for word in ['health', 'exercise', 'sleep', 'tired']):
-        themes.append('health')
-    if any(word in content_lower for word in ['goal', 'achievement', 'accomplish', 'success']):
-        themes.append('achievement')
-    if any(word in content_lower for word in ['worry', 'anxious', 'nervous', 'fear']):
-        themes.append('anxiety')
-    if any(word in content_lower for word in ['lonely', 'alone', 'isolated']):
-        themes.append('loneliness')
+    # Process questionnaire responses with detailed scoring
+    if questionnaire_data and 'questionnaire_responses' in questionnaire_data:
+        responses = questionnaire_data['questionnaire_responses']
+        
+        for response in responses:
+            question_id = response['question_id']
+            user_answer = str(response['user_response']).strip()
+            question_text = response['question']
+            
+            print(f'Processing: {question_id} = "{user_answer}"')
+            
+            # Detailed analysis for each question type
+            if question_id == 'feeling_scale':
+                try:
+                    feeling_score = float(user_answer)
+                    # Use feeling scale as primary base score
+                    base_score = feeling_score
+                    score_adjustments.append(f'Base feeling scale: {feeling_score}')
+                    print(f'Set base score from feeling scale: {base_score}')
+                    
+                    if feeling_score >= 8:
+                        positive_indicators.append(f'High mood rating: {feeling_score}/10')
+                    elif feeling_score <= 3:
+                        areas_of_concern.append(f'Low mood rating: {feeling_score}/10')
+                        
+                except ValueError:
+                    print(f'Could not parse feeling scale: {user_answer}')
+                    
+            elif question_id == 'mood_word':
+                mood_word = user_answer.lower()
+                
+                # Comprehensive mood word analysis with scoring
+                very_positive_moods = ['ecstatic', 'euphoric', 'elated', 'overjoyed', 'blissful', 'thrilled']
+                positive_moods = ['happy', 'excited', 'joyful', 'content', 'grateful', 'peaceful', 'energetic', 'optimistic']
+                neutral_moods = ['okay', 'fine', 'alright', 'neutral', 'calm', 'stable']
+                negative_moods = ['sad', 'down', 'disappointed', 'frustrated', 'tired', 'stressed', 'worried']
+                very_negative_moods = ['depressed', 'devastated', 'hopeless', 'angry', 'furious', 'anxious', 'overwhelmed']
+                
+                if any(vm in mood_word for vm in very_positive_moods):
+                    base_score += 2.5
+                    positive_indicators.append(f'Very positive mood: {user_answer}')
+                    score_adjustments.append(f'Very positive mood word: +2.5')
+                elif any(pm in mood_word for pm in positive_moods):
+                    base_score += 1.5
+                    positive_indicators.append(f'Positive mood: {user_answer}')
+                    score_adjustments.append(f'Positive mood word: +1.5')
+                elif any(nm in mood_word for nm in neutral_moods):
+                    # No adjustment for neutral
+                    score_adjustments.append(f'Neutral mood word: 0')
+                elif any(neg in mood_word for neg in negative_moods):
+                    base_score -= 1.5
+                    areas_of_concern.append(f'Negative mood: {user_answer}')
+                    score_adjustments.append(f'Negative mood word: -1.5')
+                elif any(vneg in mood_word for vneg in very_negative_moods):
+                    base_score -= 2.5
+                    areas_of_concern.append(f'Very negative mood: {user_answer}')
+                    score_adjustments.append(f'Very negative mood word: -2.5')
+                    
+            elif question_id == 'energy_level':
+                try:
+                    energy = float(user_answer)
+                    if energy >= 8:
+                        base_score += 1.0
+                        positive_indicators.append(f'High energy level: {energy}/10')
+                        score_adjustments.append(f'High energy: +1.0')
+                    elif energy >= 6:
+                        base_score += 0.5
+                        positive_indicators.append(f'Good energy level: {energy}/10')
+                        score_adjustments.append(f'Good energy: +0.5')
+                    elif energy <= 3:
+                        base_score -= 1.0
+                        areas_of_concern.append(f'Low energy level: {energy}/10')
+                        score_adjustments.append(f'Low energy: -1.0')
+                    elif energy <= 5:
+                        base_score -= 0.5
+                        areas_of_concern.append(f'Below average energy: {energy}/10')
+                        score_adjustments.append(f'Below average energy: -0.5')
+                    themes.append('energy')
+                except ValueError:
+                    pass
+                    
+            elif question_id == 'sleep_quality':
+                sleep_quality = user_answer.lower()
+                if 'excellent' in sleep_quality:
+                    base_score += 1.0
+                    positive_indicators.append(f'Excellent sleep quality')
+                    score_adjustments.append(f'Excellent sleep: +1.0')
+                elif 'good' in sleep_quality:
+                    base_score += 0.5
+                    positive_indicators.append(f'Good sleep quality')
+                    score_adjustments.append(f'Good sleep: +0.5')
+                elif 'poor' in sleep_quality:
+                    base_score -= 0.8
+                    areas_of_concern.append(f'Poor sleep quality')
+                    score_adjustments.append(f'Poor sleep: -0.8')
+                    themes.append('sleep')
+                elif 'very poor' in sleep_quality:
+                    base_score -= 1.5
+                    areas_of_concern.append(f'Very poor sleep quality')
+                    score_adjustments.append(f'Very poor sleep: -1.5')
+                    themes.append('sleep')
+                    
+            elif question_id == 'stress_level':
+                try:
+                    stress = float(user_answer)
+                    if stress >= 8:
+                        base_score -= 2.0
+                        areas_of_concern.append(f'Very high stress level: {stress}/10')
+                        score_adjustments.append(f'Very high stress: -2.0')
+                        themes.append('stress')
+                    elif stress >= 6:
+                        base_score -= 1.0
+                        areas_of_concern.append(f'High stress level: {stress}/10')
+                        score_adjustments.append(f'High stress: -1.0')
+                        themes.append('stress')
+                    elif stress <= 3:
+                        base_score += 0.5
+                        positive_indicators.append(f'Low stress level: {stress}/10')
+                        score_adjustments.append(f'Low stress: +0.5')
+                except ValueError:
+                    pass
+                    
+            elif question_id == 'positive_experience':
+                if user_answer and len(user_answer.strip()) > 15:
+                    # Analyze the content of positive experience
+                    pos_content = user_answer.lower()
+                    if any(word in pos_content for word in ['amazing', 'wonderful', 'fantastic', 'incredible']):
+                        base_score += 1.5
+                        score_adjustments.append(f'Very positive experience: +1.5')
+                    elif any(word in pos_content for word in ['good', 'nice', 'pleasant', 'enjoyable']):
+                        base_score += 1.0
+                        score_adjustments.append(f'Positive experience: +1.0')
+                    else:
+                        base_score += 0.5
+                        score_adjustments.append(f'Some positive experience: +0.5')
+                    
+                    positive_indicators.append('Identified meaningful positive experiences')
+                    themes.append('gratitude')
+                    
+            elif question_id == 'challenging_experience':
+                if user_answer and len(user_answer.strip()) > 15:
+                    # Analyze the severity of challenges
+                    challenge_content = user_answer.lower()
+                    if any(word in challenge_content for word in ['terrible', 'awful', 'devastating', 'overwhelming']):
+                        base_score -= 1.5
+                        score_adjustments.append(f'Severe challenges: -1.5')
+                    elif any(word in challenge_content for word in ['difficult', 'hard', 'stressful', 'frustrating']):
+                        base_score -= 1.0
+                        score_adjustments.append(f'Moderate challenges: -1.0')
+                    else:
+                        base_score -= 0.5
+                        score_adjustments.append(f'Minor challenges: -0.5')
+                    
+                    areas_of_concern.append('Facing significant challenges')
+                    themes.append('challenges')
+                    
+            elif question_id == 'social_interaction':
+                social = user_answer.lower()
+                if 'very positive' in social:
+                    base_score += 1.0
+                    positive_indicators.append(f'Very positive social interactions')
+                    score_adjustments.append(f'Very positive social: +1.0')
+                elif 'positive' in social:
+                    base_score += 0.5
+                    positive_indicators.append(f'Positive social interactions')
+                    score_adjustments.append(f'Positive social: +0.5')
+                elif 'negative' in social or 'very negative' in social:
+                    base_score -= 1.0
+                    areas_of_concern.append(f'Negative social interactions')
+                    score_adjustments.append(f'Negative social: -1.0')
+                elif 'no social interaction' in social:
+                    base_score -= 0.3
+                    areas_of_concern.append('Social isolation')
+                    score_adjustments.append(f'Social isolation: -0.3')
+                    themes.append('isolation')
+                themes.append('social')
+                    
+            elif question_id == 'physical_activity':
+                activity = user_answer.lower()
+                if 'intense' in activity:
+                    base_score += 1.0
+                    positive_indicators.append(f'Intense physical activity')
+                    score_adjustments.append(f'Intense exercise: +1.0')
+                elif 'moderate' in activity:
+                    base_score += 0.7
+                    positive_indicators.append(f'Moderate physical activity')
+                    score_adjustments.append(f'Moderate exercise: +0.7')
+                elif 'light' in activity:
+                    base_score += 0.3
+                    positive_indicators.append(f'Light physical activity')
+                    score_adjustments.append(f'Light activity: +0.3')
+                elif 'no activity' in activity:
+                    base_score -= 0.5
+                    areas_of_concern.append('Lack of physical activity')
+                    score_adjustments.append(f'No activity: -0.5')
+                themes.append('exercise')
+                    
+            elif question_id == 'gratitude':
+                if user_answer and len(user_answer.strip()) > 10:
+                    base_score += 0.8
+                    positive_indicators.append('Practicing gratitude')
+                    score_adjustments.append(f'Gratitude practice: +0.8')
+                    themes.append('gratitude')
     
-    # Add themes from analysis if available
-    if 'themes' in analysis and isinstance(analysis['themes'], list):
-        themes.extend(analysis['themes'])
-    
-    return list(set(themes))  # Remove duplicates
-
-def create_enhanced_fallback_analysis(mood, content, questionnaire_data=None):
-    """Create an enhanced fallback analysis when the API fails."""
-    
+    # Enhanced content analysis with weighted keywords
     content_lower = content.lower()
     
-    # Enhanced sentiment analysis
-    positive_words = ['happy', 'good', 'great', 'excellent', 'amazing', 'wonderful', 'fantastic', 'joy', 'love', 'excited', 'grateful', 'accomplished', 'proud']
-    negative_words = ['sad', 'bad', 'terrible', 'awful', 'horrible', 'depressed', 'angry', 'frustrated', 'worried', 'anxious', 'stressed', 'overwhelmed']
+    # Weighted positive keywords
+    positive_keywords = {
+        'amazing': 2.0, 'incredible': 2.0, 'fantastic': 2.0, 'wonderful': 1.8,
+        'excellent': 1.5, 'great': 1.2, 'good': 1.0, 'happy': 1.5, 'excited': 1.8,
+        'joyful': 1.8, 'love': 1.5, 'grateful': 1.5, 'accomplished': 1.8,
+        'proud': 1.5, 'successful': 1.6, 'blessed': 1.4, 'peaceful': 1.3
+    }
     
-    positive_count = sum(1 for word in positive_words if word in content_lower)
-    negative_count = sum(1 for word in negative_words if word in content_lower)
+    # Weighted negative keywords
+    negative_keywords = {
+        'terrible': -2.0, 'awful': -2.0, 'horrible': -2.0, 'devastating': -2.5,
+        'bad': -1.2, 'sad': -1.5, 'depressed': -2.0, 'angry': -1.8,
+        'frustrated': -1.5, 'worried': -1.3, 'anxious': -1.6, 'stressed': -1.4,
+        'overwhelmed': -1.8, 'exhausted': -1.5, 'hopeless': -2.3, 'lonely': -1.6
+    }
     
-    # Determine sentiment and score
-    if positive_count > negative_count:
+    # Apply content-based scoring
+    content_score_adjustment = 0.0
+    for word, weight in positive_keywords.items():
+        if word in content_lower:
+            content_score_adjustment += weight
+            print(f'Found positive word "{word}" with weight {weight}')
+    
+    for word, weight in negative_keywords.items():
+        if word in content_lower:
+            content_score_adjustment += weight  # weight is already negative
+            print(f'Found negative word "{word}" with weight {weight}')
+    
+    if content_score_adjustment != 0:
+        base_score += content_score_adjustment
+        score_adjustments.append(f'Content analysis: {content_score_adjustment:+.1f}')
+    
+    # Ensure score is within bounds
+    final_score = max(0.0, min(10.0, base_score))
+    
+    print(f'Score calculation:')
+    for adjustment in score_adjustments:
+        print(f'  - {adjustment}')
+    print(f'Final score: {final_score:.1f}')
+    
+    # Determine sentiment and emoji based on final score with more granular ranges
+    if final_score >= 8.5:
+        sentiment = 'very positive'
+        emoji = '😄'
+    elif final_score >= 7.0:
         sentiment = 'positive'
-        score = min(7 + positive_count, 10)
         emoji = '😊'
-    elif negative_count > positive_count:
-        sentiment = 'negative'
-        score = max(3 - negative_count, 0)
-        emoji = '😕'
-    else:
+    elif final_score >= 6.0:
+        sentiment = 'slightly positive'
+        emoji = '🙂'
+    elif final_score >= 4.5:
         sentiment = 'neutral'
-        score = 5
         emoji = '😐'
-    
-    # Create contextual insights
-    if questionnaire_data and 'feeling_scale' in questionnaire_data:
-        feeling = questionnaire_data['feeling_scale']
-        insights = f"Based on your mood entry and rating of {feeling}/10, you seem to be experiencing {sentiment} emotions. Your mood appears to be {mood.lower()}."
+    elif final_score >= 3.0:
+        sentiment = 'slightly negative'
+        emoji = '😕'
+    elif final_score >= 1.5:
+        sentiment = 'negative'
+        emoji = '😔'
     else:
-        insights = f"Your mood entry suggests you're experiencing {sentiment} emotions. Your overall mood appears to be {mood.lower()}."
+        sentiment = 'very negative'
+        emoji = '😢'
+    
+    # Generate contextual insights
+    insights = generate_detailed_insights(
+        final_score, sentiment, mood, content, questionnaire_data, 
+        positive_indicators, areas_of_concern, score_adjustments
+    )
     
     # Generate contextual suggestions
-    user_data = convert_questionnaire_to_analyze_data_format(content, questionnaire_data)
-    suggestions = generate_contextual_suggestions(score/2.5 + 1, user_data, content, {})
+    suggestions = generate_varied_suggestions(
+        final_score, questionnaire_data, positive_indicators, areas_of_concern, themes
+    )
     
-    return {
+    analysis = {
         'mood': mood,
         'sentiment': sentiment,
-        'score': score,
+        'score': round(final_score, 1),
         'insights': insights,
         'suggestions': suggestions,
         'emoji': emoji,
-        'themes': extract_themes_from_content(content, {}),
-        'confidence': 0.6,
-        'apiError': True,
-        'error': 'Analysis service temporarily unavailable - using enhanced basic analysis',
+        'themes': list(set(themes)),
+        'confidence': confidence,
+        'apiError': False,
         'timestamp': datetime.utcnow().isoformat(),
-        'source': 'enhanced-fallback'
+        'source': 'enhanced-local-analysis-with-variation',
+        'questionnaire_context': True,
+        'key_factors': {
+            'positive_indicators': positive_indicators,
+            'areas_of_concern': areas_of_concern,
+            'score_adjustments': score_adjustments
+        },
+        'debug': {
+            'base_score': base_score,
+            'final_score': final_score,
+            'content_adjustment': content_score_adjustment,
+            'positive_count': len(positive_indicators),
+            'concern_count': len(areas_of_concern)
+        }
     }
+    
+    print(f'=== ANALYSIS COMPLETE ===')
+    print(f'Final Score: {final_score:.1f}, Emoji: {emoji}, Sentiment: {sentiment}')
+    print(f'Positive indicators: {len(positive_indicators)}, Concerns: {len(areas_of_concern)}')
+    
+    return analysis
+
+def generate_detailed_insights(score, sentiment, mood, content, questionnaire_data, positive_indicators, areas_of_concern, score_adjustments):
+    """Generate detailed insights that reference specific questionnaire responses and scoring."""
+    
+    insights = f"Based on your comprehensive responses, you're experiencing {sentiment} emotions with a wellness score of {score}/10. "
+    
+    # Reference specific positive aspects
+    if positive_indicators:
+        if len(positive_indicators) == 1:
+            insights += f"A key positive aspect is: {positive_indicators[0]}. "
+        else:
+            insights += f"Key positive aspects include: {', '.join(positive_indicators[:2])}. "
+    
+    # Reference specific concerns
+    if areas_of_concern:
+        if len(areas_of_concern) == 1:
+            insights += f"An area that may need attention is: {areas_of_concern[0]}. "
+        else:
+            insights += f"Areas that may need attention include: {', '.join(areas_of_concern[:2])}. "
+    
+    # Add contextual advice based on score range
+    if score >= 8:
+        insights += "You're in an excellent emotional space - continue the practices and activities that are contributing to your well-being."
+    elif score >= 6.5:
+        insights += "You're in a good emotional state with strong positive momentum. Keep building on what's working well."
+    elif score >= 4.5:
+        insights += "Your emotional state appears balanced, with opportunities to enhance your well-being in certain areas."
+    elif score >= 3:
+        insights += "You're experiencing some challenges, but there are positive elements to build upon. Be patient and gentle with yourself."
+    else:
+        insights += "You're going through a difficult time. It's important to prioritize self-care and consider reaching out for support."
+    
+    return insights
+
+def generate_varied_suggestions(score, questionnaire_data, positive_indicators, areas_of_concern, themes):
+    """Generate varied suggestions based on specific analysis results."""
+    
+    suggestions = []
+    
+    # Suggestions based on specific areas of concern
+    if any('stress' in concern.lower() for concern in areas_of_concern):
+        suggestions.append("Practice stress-reduction techniques like deep breathing, meditation, or progressive muscle relaxation to manage your stress levels")
+    
+    if any('sleep' in concern.lower() for concern in areas_of_concern):
+        suggestions.append("Focus on improving sleep hygiene: maintain a consistent bedtime, limit screens before bed, and create a relaxing sleep environment")
+    
+    if any('energy' in concern.lower() for concern in areas_of_concern):
+        suggestions.append("Boost your energy levels through gentle physical activity, proper nutrition, adequate hydration, and sufficient rest")
+    
+    if any('social' in concern.lower() for concern in areas_of_concern):
+        suggestions.append("Reach out to trusted friends or family members for meaningful social connection and emotional support")
+    
+    # Suggestions based on positive indicators to maintain
+    if any('exercise' in indicator.lower() or 'activity' in indicator.lower() for indicator in positive_indicators):
+        suggestions.append("Continue your physical activity routine as it's making a positive contribution to your overall well-being")
+    
+    if any('gratitude' in indicator.lower() for indicator in positive_indicators):
+        suggestions.append("Keep practicing gratitude - consider expanding your gratitude practice with a daily journal or sharing appreciation with others")
+    
+    if any('positive' in indicator.lower() and 'mood' in indicator.lower() for indicator in positive_indicators):
+        suggestions.append("Build on your positive mood by engaging in more activities that bring you joy and fulfillment")
+    
+    # Fill remaining suggestions based on score ranges
+    while len(suggestions) < 4:
+        if score >= 8:
+            remaining = [
+                "Share your positive energy and enthusiasm with others who might benefit from your optimism",
+                "Take time to reflect on and appreciate the specific factors contributing to your excellent mood",
+                "Consider setting new positive goals or challenges to maintain this upward momentum",
+                "Practice mindfulness to fully experience and remember these wonderful feelings"
+            ]
+        elif score >= 6.5:
+            remaining = [
+                "Continue building on this positive foundation with activities that align with your values",
+                "Practice gratitude for the good things happening in your life right now",
+                "Strengthen your support network by connecting with people who uplift and inspire you",
+                "Maintain the healthy habits and routines that are contributing to your well-being"
+            ]
+        elif score >= 4.5:
+            remaining = [
+                "Engage in activities that typically boost your mood and bring you a sense of accomplishment",
+                "Take dedicated time for self-reflection and gentle self-care practices",
+                "Reach out to someone you trust for meaningful conversation and emotional connection",
+                "Try incorporating small positive activities or rituals into your daily routine"
+            ]
+        elif score >= 3:
+            remaining = [
+                "Be extra gentle and compassionate with yourself as you navigate these challenges",
+                "Practice grounding techniques like deep breathing, mindfulness, or gentle movement",
+                "Consider reaching out to a trusted friend, family member, or mental health professional",
+                "Focus on small, manageable self-care activities that provide comfort and stability"
+            ]
+        else:
+            remaining = [
+                "Prioritize your mental health and well-being above all else during this difficult time",
+                "Strongly consider speaking with a mental health professional for additional support and guidance",
+                "Engage in very gentle self-care activities like warm baths, calming music, or light reading",
+                "Remember that these intense feelings are temporary, and reaching out for help is a sign of strength"
+            ]
+        
+        for suggestion in remaining:
+            if suggestion not in suggestions and len(suggestions) < 4:
+                suggestions.append(suggestion)
+    
+    return suggestions[:4]
 
 @mood_bp.route('/mood', methods=['POST'])
 def save_mood_entry():
+    start_time = time.time()
+    
     # Check authorization
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
-        print('Missing or invalid Authorization header')
         return jsonify({'error': 'Missing or invalid Authorization header'}), 401
     
     token = auth_header.split(' ')[1]
     authenticated_user_id = verify_token(token)
     if not authenticated_user_id:
-        print('Invalid access token')
         return jsonify({'error': 'Invalid access token'}), 401
 
     data = request.get_json()
     if not data:
-        print('No JSON data provided')
         return jsonify({'error': 'No data provided'}), 400
         
     user_id = data.get('userId')
     mood = data.get('mood')
     content = data.get('content')
     questionnaire_data = data.get('questionnaireData')
-    analysis = data.get('analysis')  # Pre-provided analysis from client
 
     # Validate inputs
     if not user_id or not uuid_regex.match(user_id):
-        print(f'Invalid or missing user_id: {user_id}')
         return jsonify({'error': 'Invalid or missing user_id'}), 400
     if authenticated_user_id != user_id:
-        print(f'Unauthorized: Token user_id {authenticated_user_id} does not match requested user_id {user_id}')
         return jsonify({'error': 'Unauthorized: User ID mismatch'}), 403
     if not mood or not content:
-        print('Missing required fields: mood or content')
         return jsonify({'error': 'Missing required fields: mood and content are required'}), 400
 
     try:
-        print(f'Processing mood entry for user_id: {user_id}')
-        print(f'Mood: {mood}, Content: {content[:100]}...')
-        print(f'Questionnaire data: {questionnaire_data}')
+        print(f'=== PROCESSING ENHANCED MOOD ENTRY ===')
+        print(f'User ID: {user_id}')
+        print(f'Mood: {mood}')
+        print(f'Content length: {len(content)}')
+        print(f'Questionnaire responses: {len(questionnaire_data.get("questionnaire_responses", []))}')
         
-        # Use provided analysis if valid, otherwise call analyze-data API
-        final_analysis = analysis
-        if not final_analysis or final_analysis.get('apiError') == True:
-            print('No valid pre-provided analysis, calling enhanced analyze-data API...')
-            
-            # Try to get analysis from analyze-data API with enhanced processing
-            api_analysis = call_analyze_data_api(content, questionnaire_data)
-            
-            if api_analysis:
-                final_analysis = api_analysis
-                print('Successfully got enhanced analysis from analyze-data API')
-            else:
-                print('Analyze-data API analysis failed, creating enhanced fallback analysis')
-                final_analysis = create_enhanced_fallback_analysis(mood, content, questionnaire_data)
+        # Create authenticated Supabase client
+        authenticated_supabase = create_authenticated_supabase_client(token)
+        
+        # Check daily limit
+        today = date.today().isoformat()
+        existing_check = authenticated_supabase.table('mood_entries')\
+            .select('mood_id, analysis')\
+            .eq('user_id', user_id)\
+            .gte('created_at', today)\
+            .lt('created_at', f'{today}T23:59:59')\
+            .limit(1)\
+            .execute()
+        
+        if existing_check.data and len(existing_check.data) > 0:
+            existing_entry = existing_check.data[0]
+            return jsonify({
+                'redirectToHome': True,
+                'message': 'You have already created a mood entry for today.',
+                'analysis': existing_entry.get('analysis', {}),
+                'existingEntry': True
+            }), 200
+        
+        # Try enhanced AI analysis first
+        print('Attempting enhanced AI analysis with questionnaire context...')
+        api_analysis = call_enhanced_analyze_api(content, questionnaire_data)
+        
+        if api_analysis and api_analysis.get('score') != 5.0:  # Avoid default neutral scores
+            print(f'Using enhanced AI analysis with score: {api_analysis.get("score")}')
+            final_analysis = api_analysis
         else:
-            print('Using pre-provided analysis')
-            # Ensure the pre-provided analysis has the right source
-            final_analysis['source'] = final_analysis.get('source', 'client')
+            print('Using enhanced local analysis with variation')
+            final_analysis = analyze_with_enhanced_variation(content, mood, questionnaire_data)
 
         # Generate mood_id
         mood_id = str(uuid.uuid4())
@@ -665,95 +660,63 @@ def save_mood_entry():
             'created_at': datetime.utcnow().isoformat()
         }
 
-        print(f'Attempting to save mood entry with mood_id: {mood_id}')
-        print(f'Final analysis source: {final_analysis.get("source", "unknown")}')
+        print(f'Saving mood entry with analysis:')
+        print(f'  Score: {final_analysis.get("score")}')
+        print(f'  Emoji: {final_analysis.get("emoji")}')
+        print(f'  Sentiment: {final_analysis.get("sentiment")}')
+        print(f'  Source: {final_analysis.get("source")}')
 
-        # Create authenticated Supabase client
-        authenticated_supabase = create_authenticated_supabase_client(token)
-        
         # Insert into mood_entries table
         response = authenticated_supabase.table('mood_entries').insert(mood_entry).execute()
         
+        processing_time = time.time() - start_time
+        print(f'Total processing time: {processing_time:.2f}s')
+        
         if response.data and len(response.data) > 0:
-            print(f'Mood entry saved successfully with mood_id: {mood_id}')
+            print(f'Enhanced mood entry saved successfully with mood_id: {mood_id}')
             return jsonify({
                 'id': mood_id,
                 'analysis': final_analysis,
-                'success': True
+                'success': True,
+                'processingTime': round(processing_time, 2),
+                'enhanced': True,
+                'varied': True
             }), 201
         else:
-            print(f'Failed to save mood entry - no data returned: {response}')
-            return jsonify({'error': 'Failed to save mood entry - database insert failed'}), 500
+            return jsonify({'error': 'Failed to save mood entry'}), 500
 
     except Exception as e:
-        print(f'Unexpected error saving mood entry: {str(e)}')
+        processing_time = time.time() - start_time
+        print(f'Error saving enhanced mood entry (after {processing_time:.2f}s): {str(e)}')
         import traceback
         traceback.print_exc()
         return jsonify({'error': 'Internal server error'}), 500
 
-# Test endpoint for enhanced analyze-data API
-@mood_bp.route('/mood/test-enhanced', methods=['POST'])
-def test_enhanced_analysis():
-    """Test the enhanced analyze-data API processing."""
-    data = request.get_json() or {}
-    content = data.get('content', 'I feel happy today and accomplished a lot at work')
-    questionnaire_data = data.get('questionnaireData', {
-        'feeling_scale': 7,
-        'mood_word': 'happy',
-        'positive_experience': 'completed project at work',
-        'negative_factors': 'none'
-    })
-    
-    print(f'Testing enhanced analyze-data API with content: {content}')
-    print(f'Questionnaire data: {questionnaire_data}')
-    
-    result = call_analyze_data_api(content, questionnaire_data)
-    
-    if result:
-        return jsonify({
-            'success': True,
-            'analysis': result,
-            'message': 'Enhanced analysis completed successfully'
-        }), 200
-    else:
-        fallback = create_enhanced_fallback_analysis('Happy', content, questionnaire_data)
-        return jsonify({
-            'success': False,
-            'fallback_analysis': fallback,
-            'message': 'Analyze-data API failed, enhanced fallback analysis created'
-        }), 200
-
 @mood_bp.route('/mood', methods=['GET'])
 def get_mood_entries():
-    # [Keep your existing GET method unchanged]
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
-        print('Missing or invalid Authorization header')
         return jsonify({'error': 'Missing or invalid Authorization header'}), 401
     
     token = auth_header.split(' ')[1]
     authenticated_user_id = verify_token(token)
     if not authenticated_user_id:
-        print('Invalid access token')
         return jsonify({'error': 'Invalid access token'}), 401
 
     user_id = request.args.get('userId')
     if not user_id or not uuid_regex.match(user_id):
-        print(f'Invalid or missing user_id: {user_id}')
         return jsonify({'error': 'Invalid or missing user_id'}), 400
     if authenticated_user_id != user_id:
-        print(f'Unauthorized: Token user_id {authenticated_user_id} does not match requested user_id {user_id}')
         return jsonify({'error': 'Unauthorized: User ID mismatch'}), 403
 
     try:
-        print(f'Fetching mood entries for user_id: {user_id}')
-        
         authenticated_supabase = create_authenticated_supabase_client(token)
 
         response = authenticated_supabase.table('mood_entries')\
-            .select('*')\
+            .select('mood_id, user_id, content, mood, created_at, analysis, questionnaire_data')\
             .eq('user_id', user_id)\
             .order('created_at', desc=True)\
+            .limit(50)\
             .execute()
         
         if response.data is not None:
@@ -769,14 +732,83 @@ def get_mood_entries():
                 }
                 for entry in response.data
             ]
-            print(f'Successfully fetched {len(entries)} mood entries for user_id: {user_id}')
             return jsonify(entries), 200
         else:
-            print(f'No mood entries found for user_id: {user_id}')
             return jsonify([]), 200
 
     except Exception as e:
         print(f'Error fetching mood entries: {str(e)}')
-        import traceback
-        traceback.print_exc()
         return jsonify({'error': 'Internal server error'}), 500
+
+@mood_bp.route('/mood/test-variation', methods=['POST'])
+def test_analysis_variation():
+    """Test endpoint to verify analysis variation with different inputs."""
+    
+    data = request.get_json() or {}
+    
+    test_cases = [
+        {
+            'content': 'I feel amazing today! Got a promotion at work and celebrated with friends. Everything is going perfectly.',
+            'mood': 'ecstatic',
+            'questionnaire_data': {
+                'questionnaire_responses': [
+                    {'question_id': 'feeling_scale', 'question': 'How are you feeling?', 'user_response': '9'},
+                    {'question_id': 'mood_word', 'question': 'Describe your mood', 'user_response': 'ecstatic'},
+                    {'question_id': 'energy_level', 'question': 'Energy level?', 'user_response': '9'},
+                    {'question_id': 'positive_experience', 'question': 'Positive experience?', 'user_response': 'Got promoted and celebrated with friends'}
+                ]
+            }
+        },
+        {
+            'content': 'Having a terrible day. Everything is going wrong and I feel overwhelmed.',
+            'mood': 'awful',
+            'questionnaire_data': {
+                'questionnaire_responses': [
+                    {'question_id': 'feeling_scale', 'question': 'How are you feeling?', 'user_response': '2'},
+                    {'question_id': 'mood_word', 'question': 'Describe your mood', 'user_response': 'awful'},
+                    {'question_id': 'stress_level', 'question': 'Stress level?', 'user_response': '9'},
+                    {'question_id': 'challenging_experience', 'question': 'Challenges?', 'user_response': 'Everything going wrong, feeling overwhelmed'}
+                ]
+            }
+        },
+        {
+            'content': 'Just an ordinary day. Nothing special happened.',
+            'mood': 'neutral',
+            'questionnaire_data': {
+                'questionnaire_responses': [
+                    {'question_id': 'feeling_scale', 'question': 'How are you feeling?', 'user_response': '5'},
+                    {'question_id': 'mood_word', 'question': 'Describe your mood', 'user_response': 'neutral'}
+                ]
+            }
+        }
+    ]
+    
+    results = []
+    for i, test_case in enumerate(test_cases):
+        print(f'\n=== TESTING CASE {i+1} ===')
+        analysis = analyze_with_enhanced_variation(
+            test_case['content'], 
+            test_case['mood'], 
+            test_case['questionnaire_data']
+        )
+        
+        results.append({
+            'test_case': i + 1,
+            'input': {
+                'content': test_case['content'][:50] + '...',
+                'mood': test_case['mood'],
+                'feeling_scale': test_case['questionnaire_data']['questionnaire_responses'][0]['user_response']
+            },
+            'output': {
+                'score': analysis['score'],
+                'emoji': analysis['emoji'],
+                'sentiment': analysis['sentiment'],
+                'source': analysis['source']
+            }
+        })
+    
+    return jsonify({
+        'message': 'Analysis variation test completed',
+        'results': results,
+        'variation_confirmed': len(set(r['output']['score'] for r in results)) > 1
+    }), 200
