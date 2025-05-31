@@ -2,11 +2,52 @@ from flask import Blueprint, jsonify, render_template, request, redirect, url_fo
 from supabase import create_client
 import os
 from datetime import datetime
-
-
+import jwt
+from functools import wraps
 
 auth_bp = Blueprint('auth', __name__)
 supabase = create_client(os.getenv('SUPABASE_URL'), os.getenv('SUPABASE_KEY'))
+
+def verify_token(f):
+    """Decorator to verify JWT tokens from Supabase"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        token = None
+        auth_header = request.headers.get('Authorization')
+        
+        if auth_header:
+            try:
+                # Extract token from "Bearer <token>" format
+                token = auth_header.split(' ')[1] if auth_header.startswith('Bearer ') else auth_header
+                print(f"🔑 Extracted token: {token[:20]}...")
+            except IndexError:
+                print("❌ Invalid Authorization header format")
+                return jsonify({'error': 'Invalid token format'}), 401
+        
+        if not token:
+            print("❌ No token provided")
+            return jsonify({'error': 'Token is missing'}), 401
+        
+        try:
+            # Verify token with Supabase
+            print("🔍 Verifying token with Supabase...")
+            user_response = supabase.auth.get_user(token)
+            
+            if not user_response or not user_response.user:
+                print("❌ Token verification failed - invalid user")
+                return jsonify({'error': 'Token verification failed'}), 401
+            
+            # Add user info to request context
+            request.current_user = user_response.user
+            print(f"✅ Token verified for user: {user_response.user.id}")
+            
+        except Exception as e:
+            print(f"❌ Token verification error: {str(e)}")
+            return jsonify({'error': 'Token verification failed'}), 401
+        
+        return f(*args, **kwargs)
+    
+    return decorated_function
 
 @auth_bp.route('/api/signup', methods=['POST'])
 def api_signup():
@@ -131,7 +172,6 @@ def verify_otp():
             "details": str(e)
         }), 400
 
-
 @auth_bp.route('/api/login', methods=['POST'])
 def login():
     if not request.is_json:
@@ -139,7 +179,7 @@ def login():
         return jsonify({"error": "Request must be JSON"}), 400
 
     data = request.get_json()
-    print("Received login request data:", data)  # Debug logging
+    print("Received login request data:", data)
 
     email = data.get('email')
     phone = data.get('phone')
@@ -187,12 +227,14 @@ def login():
             supabase.table('user').insert({
                 "user_id": user_id,
                 "email": user_email,
-                "phone": user_phone or '',  # Include phone if available
-                "name": user_email.split('@')[0],  # Fallback name
+                "phone": user_phone or '',
+                "name": user_email.split('@')[0] if user_email else 'User',
                 "join_date": datetime.utcnow().isoformat()
             }).execute()
 
-        print(f"Login successful for user_id: {user_id}")
+        print(f"✅ Login successful for user_id: {user_id}")
+        print(f"🔑 Access token generated: {session.access_token[:20]}...")
+        
         return jsonify({
             "message": "Login successful",
             "access_token": session.access_token,
@@ -212,8 +254,7 @@ def login():
         if "Email not confirmed" in error_msg:
             return jsonify({"error": "Please verify your email first"}), 403
         return jsonify({"error": f"Login failed: {error_msg}"}), 400
-    
-#Reset Password
+
 @auth_bp.route('/api/reset-password', methods=['POST'])
 def reset_password():
     if not request.is_json:
@@ -233,11 +274,10 @@ def reset_password():
 
         try:
             print(f"Attempting to send OTP to email: {email}")
-            # Use reset_password_for_email to specifically send OTP for password reset
             response = supabase.auth.reset_password_for_email(
                 email,
                 {
-                    "redirect_to": "http://your-app.com/reset-password"  # Optional redirect
+                    "redirect_to": "http://your-app.com/reset-password"
                 }
             )
             
@@ -258,19 +298,17 @@ def reset_password():
     # Step 2: Verify OTP and update password
     elif email and otp and new_password:
         try:
-            # Verify the OTP specifically for password recovery
             print(f"Verifying OTP for email: {email}")
             otp_response = supabase.auth.verify_otp({
                 "email": email,
                 "token": otp,
-                "type": "recovery"  # Critical: must use 'recovery' type for password reset
+                "type": "recovery"
             })
             
             if not otp_response or not otp_response.user:
                 print("OTP verification failed")
                 return jsonify({"error": "Invalid or expired OTP"}), 400
             
-            # Update password using the authenticated session
             print("OTP verified, updating password...")
             update_response = supabase.auth.update_user({
                 "password": new_password
@@ -290,3 +328,15 @@ def reset_password():
             "error": "Invalid request parameters",
             "details": "Provide email for OTP request, or email+otp+new_password for reset"
         }), 400
+
+# Test endpoint to verify token functionality
+@auth_bp.route('/api/verify-token', methods=['GET'])
+@verify_token
+def test_verify_token():
+    """Test endpoint to verify if token verification is working"""
+    user = request.current_user
+    return jsonify({
+        "message": "Token is valid",
+        "user_id": user.id,
+        "email": user.email
+    }), 200
