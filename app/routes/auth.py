@@ -1,8 +1,7 @@
-from flask import Blueprint, jsonify, render_template, request, redirect, url_for, flash
+from flask import Blueprint, jsonify, request
 from supabase import create_client
 import os
 from datetime import datetime
-import jwt
 from functools import wraps
 
 auth_bp = Blueprint('auth', __name__)
@@ -17,32 +16,22 @@ def verify_token(f):
         
         if auth_header:
             try:
-                # Extract token from "Bearer <token>" format
                 token = auth_header.split(' ')[1] if auth_header.startswith('Bearer ') else auth_header
-                print(f"🔑 Extracted token: {token[:20]}...")
             except IndexError:
-                print("❌ Invalid Authorization header format")
                 return jsonify({'error': 'Invalid token format'}), 401
         
         if not token:
-            print("❌ No token provided")
             return jsonify({'error': 'Token is missing'}), 401
         
         try:
-            # Verify token with Supabase
-            print("🔍 Verifying token with Supabase...")
             user_response = supabase.auth.get_user(token)
             
             if not user_response or not user_response.user:
-                print("❌ Token verification failed - invalid user")
                 return jsonify({'error': 'Token verification failed'}), 401
             
-            # Add user info to request context
             request.current_user = user_response.user
-            print(f"✅ Token verified for user: {user_response.user.id}")
             
         except Exception as e:
-            print(f"❌ Token verification error: {str(e)}")
             return jsonify({'error': 'Token verification failed'}), 401
         
         return f(*args, **kwargs)
@@ -52,11 +41,9 @@ def verify_token(f):
 @auth_bp.route('/api/signup', methods=['POST'])
 def api_signup():
     if not request.is_json:
-        print('Error: Request is not JSON')
         return jsonify({"error": "Request must be JSON"}), 400
     
     data = request.get_json()
-    print('Received signup request data:', data)
     email = data.get('email')
     password = data.get('password')
     name = data.get('name')
@@ -64,35 +51,26 @@ def api_signup():
     
     # Validate input
     if not email:
-        print('Validation error: Email is required')
         return jsonify({"error": "Email is required"}), 400
     if not password:
-        print('Validation error: Password is required')
         return jsonify({"error": "Password is required"}), 400
     if len(password) < 8:
-        print('Validation error: Password too short')
         return jsonify({"error": "Password must be at least 8 characters"}), 400
     if not name:
-        print('Validation error: Name is required')
         return jsonify({"error": "Name is required"}), 400
     if not phone:
-        print('Validation error: Phone is required')
         return jsonify({"error": "Phone is required"}), 400
     
     # Check if email already exists
     try:
-        print(f'Checking if email exists: {email}')
         existing_user = supabase.table('user').select('email').eq('email', email).execute()
         if existing_user.data:
-            print('Email already registered:', email)
             return jsonify({"error": "Email is already registered"}), 400
     except Exception as e:
-        print(f'Error checking email: {str(e)}')
         return jsonify({"error": "Error checking email", "details": str(e)}), 500
     
     try:
         # Sign up with email and OTP verification
-        print(f'Attempting signup for email: {email}')
         response = supabase.auth.sign_up({
             "email": email,
             "password": password,
@@ -103,7 +81,6 @@ def api_signup():
         })
 
         # Insert user data into the users table
-        print(f'Inserting user data for user_id: {response.user.id}')
         supabase.table('user').insert({
             "user_id": response.user.id,
             "email": email,
@@ -112,14 +89,12 @@ def api_signup():
             "join_date": datetime.utcnow().isoformat()
         }).execute()
         
-        print('Signup successful, OTP sent')
         return jsonify({
             "message": "OTP sent to your email for verification",
             "user_id": response.user.id
         }), 201
         
     except Exception as e:
-        print(f'Error during signup: {str(e)}')
         return jsonify({
             "error": "Signup failed",
             "details": str(e)
@@ -127,34 +102,26 @@ def api_signup():
 
 @auth_bp.route('/api/verify-otp', methods=['POST'])
 def verify_otp():
-    # Validate request
     if not request.is_json:
-        print('Error: Request is not JSON')
         return jsonify({"error": "Request must be JSON"}), 400
     
     data = request.get_json()
-    print('Received OTP verification request data:', data)
     email = data.get('email')
     token = data.get('token')
     
-    # Validate input
     if not email or not token:
-        print('Validation error: Email and OTP token are required')
         return jsonify({"error": "Email and OTP token are required"}), 400
     
     try:
-        print(f'Verifying OTP for email: {email}')
         response = supabase.auth.verify_otp({
             "email": email,
             "token": token,
-            "type": "signup"  # For signup verification
+            "type": "signup"
         })
         
         if not response or not response.session:
-            print('OTP verification failed')
             return jsonify({"error": "Verification failed"}), 400
             
-        print('OTP verification successful')
         return jsonify({
             "message": "Email verification successful",
             "access_token": response.session.access_token,
@@ -166,7 +133,6 @@ def verify_otp():
         }), 200
         
     except Exception as e:
-        print(f'Error during OTP verification: {str(e)}')
         return jsonify({
             "error": "Verification failed",
             "details": str(e)
@@ -175,44 +141,35 @@ def verify_otp():
 @auth_bp.route('/api/login', methods=['POST'])
 def login():
     if not request.is_json:
-        print('Error: Request is not JSON')
         return jsonify({"error": "Request must be JSON"}), 400
 
     data = request.get_json()
-    print("Received login request data:", data)
-
     email = data.get('email')
     phone = data.get('phone')
     password = data.get('password')
 
     if not password or not (email or phone):
-        print('Error: Missing email/phone or password')
         return jsonify({"error": "Email or phone and password required"}), 400
 
     try:
         if email:
-            print(f"Attempting login with email: {email}")
             response = supabase.auth.sign_in_with_password({
                 "email": email,
                 "password": password
             })
         else:
-            print(f"Attempting login with phone: {phone}")
             response = supabase.auth.sign_in_with_password({
                 "phone": phone,
                 "password": password
             })
 
-        # Check for valid response
         if not response or not hasattr(response, 'session') or not hasattr(response, 'user'):
-            print("Supabase login failed: Invalid response structure")
             return jsonify({"error": "Unexpected response from Supabase"}), 500
 
         session = response.session
         user = response.user
 
         if not session or not user:
-            print("Supabase login failed: Missing session or user data")
             return jsonify({"error": "Authentication failed"}), 401
 
         user_id = user.id
@@ -222,8 +179,7 @@ def login():
         # Check if user exists in the users table
         existing = supabase.table('user').select('user_id').eq('user_id', user_id).execute()
         if not existing.data:
-            # Insert user into users table, aligning with signup schema
-            print(f"Inserting new user {user_id} into users table")
+            # Insert user into users table
             supabase.table('user').insert({
                 "user_id": user_id,
                 "email": user_email,
@@ -231,9 +187,6 @@ def login():
                 "name": user_email.split('@')[0] if user_email else 'User',
                 "join_date": datetime.utcnow().isoformat()
             }).execute()
-
-        print(f"✅ Login successful for user_id: {user_id}")
-        print(f"🔑 Access token generated: {session.access_token[:20]}...")
         
         return jsonify({
             "message": "Login successful",
@@ -247,7 +200,6 @@ def login():
         }), 200
 
     except Exception as e:
-        print("Login error:", str(e))
         error_msg = str(e)
         if "Invalid login credentials" in error_msg:
             return jsonify({"error": "Invalid email/phone or password"}), 401
@@ -261,8 +213,6 @@ def reset_password():
         return jsonify({"error": "Request must be JSON"}), 400
 
     data = request.get_json()
-    print("Received reset password request data:", data)
-
     email = data.get('email')
     new_password = data.get('new_password')
     otp = data.get('otp')
@@ -273,7 +223,6 @@ def reset_password():
             return jsonify({"error": "Email is required to reset password"}), 400
 
         try:
-            print(f"Attempting to send OTP to email: {email}")
             response = supabase.auth.reset_password_for_email(
                 email,
                 {
@@ -288,7 +237,6 @@ def reset_password():
             }), 200
             
         except Exception as e:
-            print(f"Error sending OTP: {str(e)}")
             return jsonify({
                 "message": "If an account exists, an OTP has been sent",
                 "next_step": "verify_otp",
@@ -298,7 +246,6 @@ def reset_password():
     # Step 2: Verify OTP and update password
     elif email and otp and new_password:
         try:
-            print(f"Verifying OTP for email: {email}")
             otp_response = supabase.auth.verify_otp({
                 "email": email,
                 "token": otp,
@@ -306,10 +253,8 @@ def reset_password():
             })
             
             if not otp_response or not otp_response.user:
-                print("OTP verification failed")
                 return jsonify({"error": "Invalid or expired OTP"}), 400
             
-            print("OTP verified, updating password...")
             update_response = supabase.auth.update_user({
                 "password": new_password
             })
@@ -320,7 +265,6 @@ def reset_password():
             }), 200
             
         except Exception as e:
-            print(f"Error during password reset: {str(e)}")
             return jsonify({"error": str(e)}), 400
     
     else:
@@ -329,7 +273,6 @@ def reset_password():
             "details": "Provide email for OTP request, or email+otp+new_password for reset"
         }), 400
 
-# Test endpoint to verify token functionality
 @auth_bp.route('/api/verify-token', methods=['GET'])
 @verify_token
 def test_verify_token():

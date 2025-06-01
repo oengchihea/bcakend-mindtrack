@@ -2,12 +2,12 @@ from flask import Blueprint, request, jsonify, current_app
 from datetime import datetime, date, timedelta
 import uuid
 import re
+import base64
 from functools import wraps
-from supabase import Client
+from supabase import Client, create_client
 
 user_bp = Blueprint('user', __name__)
 
-# UUID validation regex
 UUID_REGEX = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
 
 def require_auth(f):
@@ -15,553 +15,629 @@ def require_auth(f):
     def decorated(*args, **kwargs):
         auth_header = request.headers.get('Authorization')
         if not auth_header:
-            print('Error: Authorization header missing')
             return jsonify({"error": "Authorization header is required"}), 401
         
         try:
             token = auth_header.replace('Bearer ', '')
             supabase: Client = current_app.supabase
-            user = supabase.auth.get_user(token)
-            if not user:
-                print('Error: Invalid or expired token')
+            user_session_data = supabase.auth.get_user(token) 
+            if not user_session_data or not user_session_data.user: 
                 return jsonify({"error": "Invalid or expired token"}), 401
-            request.user = user
+            
+            request.user = user_session_data 
+            request.auth_token = token  # Store token for RLS
         except Exception as e:
-            print(f'Error verifying token: {str(e)}')
             return jsonify({"error": "Token verification failed", "details": str(e)}), 401
         
         return f(*args, **kwargs)
     return decorated
 
+def get_authenticated_supabase():
+    """Get Supabase client with proper authentication for RLS"""
+    token = getattr(request, 'auth_token', None)
+    if token:
+        authenticated_supabase = create_client(
+            current_app.config['SUPABASE_URL'],
+            current_app.config['SUPABASE_KEY']
+        )
+        authenticated_supabase.postgrest.auth(token)
+        return authenticated_supabase
+    return current_app.supabase
+
+def get_service_role_supabase():
+    """Get Supabase client with service role for storage operations"""
+    service_role_key = current_app.config.get('SUPABASE_SERVICE_ROLE_KEY')
+    if service_role_key:
+        return create_client(
+            current_app.config['SUPABASE_URL'],
+            service_role_key
+        )
+    return current_app.supabase
+
 def mood_to_emoji(mood, analysis=None):
-    """Convert mood string to emoji, with fallback to analysis data."""
-    
-    # First try to get emoji from analysis if available
     if analysis and isinstance(analysis, dict):
         if 'emoji' in analysis and analysis['emoji']:
             return analysis['emoji']
-        
-        # Try to get from sentiment in analysis
         sentiment = analysis.get('sentiment', '').lower()
-        if 'very positive' in sentiment:
-            return '😄'
-        elif 'positive' in sentiment:
-            return '😊'
-        elif 'neutral' in sentiment:
-            return '😐'
-        elif 'negative' in sentiment:
-            return '😔'
-        elif 'very negative' in sentiment:
-            return '😢'
+        if 'very positive' in sentiment: return '😄'
+        elif 'positive' in sentiment: return '😊'
+        elif 'neutral' in sentiment: return '😐'
+        elif 'negative' in sentiment: return '😔'
+        elif 'very negative' in sentiment: return '😢'
     
-    # Fallback to mood string mapping
     mood_lower = mood.lower() if mood else ''
-    
     mood_emoji_map = {
-        'happy': '😊',
-        'very happy': '😄',
-        'ecstatic': '😄',
-        'joyful': '😊',
-        'excited': '😊',
-        'content': '😊',
-        'peaceful': '😊',
-        'grateful': '😊',
-        
-        'sad': '😔',
-        'very sad': '😢',
-        'depressed': '😢',
-        'down': '😔',
-        'disappointed': '😔',
-        
-        'angry': '😡',
-        'furious': '😡',
-        'frustrated': '😠',
-        
-        'anxious': '😰',
-        'worried': '😰',
-        'stressed': '😰',
-        'overwhelmed': '😰',
-        
-        'neutral': '😐',
-        'okay': '😐',
-        'fine': '😐',
-        'alright': '😐',
-        'calm': '😐',
-        
-        'tired': '😴',
-        'exhausted': '😴',
-        'energetic': '😊',
+        'happy': '😊', 'very happy': '😄', 'ecstatic': '😄', 'joyful': '😊', 'excited': '😊',
+        'content': '😊', 'peaceful': '😊', 'grateful': '😊', 'sad': '😔', 'very sad': '😢',
+        'depressed': '😢', 'down': '😔', 'disappointed': '😔', 'angry': '😡', 'furious': '😡',
+        'frustrated': '😠', 'anxious': '😰', 'worried': '😰', 'stressed': '😰',
+        'overwhelmed': '😰', 'neutral': '😐', 'okay': '😐', 'fine': '😐', 'alright': '😐',
+        'calm': '😐', 'tired': '😴', 'exhausted': '😴', 'energetic': '😊',
     }
-    
-    # Try exact match first
-    if mood_lower in mood_emoji_map:
-        return mood_emoji_map[mood_lower]
-    
-    # Try partial matches
+    if mood_lower in mood_emoji_map: return mood_emoji_map[mood_lower]
     for mood_key, emoji in mood_emoji_map.items():
-        if mood_key in mood_lower:
-            return emoji
-    
-    # Default emoji
+        if mood_key in mood_lower: return emoji
     return '😐'
 
 def _validate_user_id(user_id):
-    """Validate user ID - allow test IDs during development"""
-    if not user_id or user_id.strip() == '':
+    if not user_id or user_id.strip() == '': 
         raise ValueError("User ID cannot be empty")
     
-    # Allow test user IDs during development
     test_user_ids = ['user123', 'test-user', 'demo-user']
     if user_id in test_user_ids:
-        print(f'⚠️ Using test user ID: {user_id}')
         return True
     
-    # Validate UUID format for production
     if not UUID_REGEX.match(user_id):
-        print(f'❌ Invalid UUID format for user_id: "{user_id}"')
         raise ValueError(f'Invalid userId format: {user_id}')
-    
     return True
+
+def _upload_profile_image(user_id, image_data):
+    """Upload profile image to Supabase storage using service role"""
+    try:
+        if not image_data or not isinstance(image_data, str):
+            raise ValueError("Invalid image data: must be a non-empty string")
+            
+        if not image_data.startswith('data:image/'):
+            raise ValueError("Invalid image data format: must start with 'data:image/'")
+        
+        header, base64_data = image_data.split(',', 1)
+        
+        if 'jpeg' in header.lower() or 'jpg' in header.lower(): 
+            file_ext, content_type = 'jpg', 'image/jpeg'
+        elif 'png' in header.lower(): 
+            file_ext, content_type = 'png', 'image/png'
+        elif 'webp' in header.lower(): 
+            file_ext, content_type = 'webp', 'image/webp'
+        else: 
+            file_ext, content_type = 'jpg', 'image/jpeg'
+        
+        timestamp = int(datetime.utcnow().timestamp())
+        filename = f"profile_{user_id}_{timestamp}.{file_ext}"
+        
+        image_bytes = base64.b64decode(base64_data)
+        
+        max_size = 5 * 1024 * 1024  # 5MB
+        if len(image_bytes) > max_size:
+            raise ValueError(f"Image too large: {len(image_bytes)} bytes (max: {max_size} bytes)")
+        
+        # Use service role client for storage operations to bypass RLS
+        supabase = get_service_role_supabase()
+        
+        try:
+            # Ensure bucket exists
+            try:
+                buckets = supabase.storage.list_buckets()
+                bucket_exists = any(bucket.name == 'profiles' for bucket in buckets)
+                
+                if not bucket_exists:
+                    supabase.storage.create_bucket(
+                        'profiles', 
+                        options={
+                            'public': True,
+                            'allowedMimeTypes': ['image/jpeg', 'image/png', 'image/webp'],
+                            'fileSizeLimit': 5242880  # 5MB
+                        }
+                    )
+            except Exception:
+                # Continue anyway - bucket might exist
+                pass
+            
+            # Upload the file
+            supabase.storage.from_('profiles').upload(
+                filename, 
+                image_bytes,
+                file_options={
+                    'content-type': content_type,
+                    'cache-control': '3600'
+                }
+            )
+            
+        except Exception as upload_error:
+            # Try simpler upload without file options
+            try:
+                supabase.storage.from_('profiles').upload(filename, image_bytes)
+            except Exception as simple_error:
+                raise Exception(f"All upload methods failed. Last error: {str(simple_error)}")
+        
+        # Get public URL
+        try:
+            public_url_response = supabase.storage.from_('profiles').get_public_url(filename)
+            
+            # Handle different response formats
+            if hasattr(public_url_response, 'public_url'):
+                public_url = public_url_response.public_url
+            elif hasattr(public_url_response, 'publicURL'):
+                public_url = public_url_response.publicURL
+            elif isinstance(public_url_response, str):
+                public_url = public_url_response
+            elif isinstance(public_url_response, dict):
+                public_url = public_url_response.get('publicURL') or public_url_response.get('public_url')
+            else:
+                # Construct URL manually
+                base_url = current_app.config.get('SUPABASE_URL', '').rstrip('/')
+                public_url = f"{base_url}/storage/v1/object/public/profiles/{filename}"
+            
+            return public_url
+            
+        except Exception:
+            # Construct URL manually as fallback
+            base_url = current_app.config.get('SUPABASE_URL', '').rstrip('/')
+            public_url = f"{base_url}/storage/v1/object/public/profiles/{filename}"
+            return public_url
+        
+    except ValueError as ve:
+        raise ve
+    except Exception as e:
+        raise Exception(f"Image upload failed: {str(e)}")
 
 @user_bp.route('/api/user', methods=['GET'])
 @require_auth
 def get_user():
     user_id = request.args.get('userId')
-    if not user_id:
-        print('Validation error: userId query parameter is missing')
+    if not user_id: 
         return jsonify({"error": "userId query parameter is required"}), 400
-
-    try:
+    
+    try: 
         _validate_user_id(user_id)
-    except ValueError as e:
+    except ValueError as e: 
         return jsonify({"error": str(e)}), 400
-
+    
     try:
-        supabase: Client = current_app.supabase
-        print(f'Fetching user data for user_id: {user_id}')
+        supabase = get_authenticated_supabase()
         response = supabase.table('user').select('*').eq('user_id', user_id).execute()
         
         if not response.data:
-            print(f'User not found: {user_id}, creating new user')
-            new_user = {
-                'user_id': user_id,
+            new_user_data = {
+                'user_id': user_id, 
                 'created_at': datetime.utcnow().isoformat()
             }
-            supabase.table('user').insert(new_user).execute()
-            print(f'Successfully created user with user_id: {user_id}')
-            return jsonify(new_user), 201
+            
+            insert_response = supabase.table('user').insert(new_user_data).execute()
+            
+            if not (hasattr(insert_response, 'data') and insert_response.data):
+                error_details = getattr(insert_response, "error", "Unknown error from insert_response")
+                return jsonify({"error": "Failed to create user", "details": str(error_details)}), 500
+            
+            return jsonify(insert_response.data[0]), 201
         
         user_data = response.data[0]
-        print(f'User data fetched successfully: {user_data}')
         return jsonify(user_data), 200
         
     except Exception as e:
-        print(f'Error fetching user data: {str(e)}')
-        return jsonify({
-            "error": "Failed to fetch user data",
-            "details": str(e)
-        }), 500
+        return jsonify({"error": "Failed to fetch user data", "details": str(e)}), 500
 
 @user_bp.route('/api/user/profile', methods=['GET'])
 @require_auth
 def get_user_profile():
-    """Get user profile information including display name for homepage greeting."""
-    
     user_id = request.args.get('userId')
-    if not user_id:
-        print('Validation error: userId query parameter is missing')
+    if not user_id: 
         return jsonify({"error": "userId query parameter is required"}), 400
-
-    try:
+    
+    try: 
         _validate_user_id(user_id)
-    except ValueError as e:
+    except ValueError as e: 
         return jsonify({"error": str(e)}), 400
-
-    # Skip user ID mismatch check for test users
+    
+    authenticated_user_id = None
+    if hasattr(request, 'user') and hasattr(request.user, 'user') and hasattr(request.user.user, 'id'):
+        authenticated_user_id = request.user.user.id
+    else:
+        return jsonify({"error": "Authentication context error"}), 500
+    
     test_user_ids = ['user123', 'test-user', 'demo-user']
-    if user_id not in test_user_ids:
-        # Verify the authenticated user matches the requested user
-        if request.user.user.id != user_id:
-            print(f'Authorization error: User ID mismatch. Auth: {request.user.user.id}, Requested: {user_id}')
-            return jsonify({"error": "Unauthorized: User ID mismatch"}), 403
-
+    if user_id not in test_user_ids and authenticated_user_id != user_id:
+        return jsonify({"error": "Unauthorized: User ID mismatch"}), 403
+    
     try:
-        supabase: Client = current_app.supabase
+        supabase = get_authenticated_supabase()
+        auth_user_obj = request.user.user
+        display_name, profile_image_url, phone = "User", None, None
+        email = getattr(auth_user_obj, 'email', '')
         
-        # Get user data from Supabase auth
-        auth_user = request.user.user
-        
-        # Default fallback name
-        display_name = "User"
-        
-        # Query the actual 'name' field from your user table schema
         try:
-            print(f'Fetching user profile from user table for user_id: {user_id}')
-            user_response = supabase.table('user')\
-                .select('name, email, phone')\
-                .eq('user_id', user_id)\
-                .execute()
+            user_response = supabase.table('user').select('name, email, phone, profile_image_url').eq('user_id', user_id).maybe_single().execute()
             
-            if user_response.data and len(user_response.data) > 0:
-                user_profile = user_response.data[0]
-                print(f'Found user profile in database: {user_profile}')
+            if user_response.data:
+                user_profile = user_response.data
                 
-                # Use the 'name' field from your actual schema
-                if user_profile.get('name') and user_profile['name'].strip():
+                if user_profile.get('name') and user_profile['name'].strip(): 
                     display_name = user_profile['name'].strip()
-                    print(f'Using name from database: {display_name}')
-                else:
-                    print('Name field is empty in database')
-            else:
-                print(f'No user profile found in database for user_id: {user_id}')
+                if user_profile.get('email') and user_profile['email'].strip(): 
+                    email = user_profile['email'].strip()
+                if user_profile.get('phone'): 
+                    phone = user_profile['phone']
+                if user_profile.get('profile_image_url'): 
+                    profile_image_url = user_profile['profile_image_url']
                 
-        except Exception as db_error:
-            print(f'Error fetching from user table: {db_error}')
+        except Exception:
+            pass
         
-        # Fallback: Try to get name from Supabase auth metadata
+        # Fallback to auth metadata
         if display_name == "User":
-            print('Falling back to auth metadata for name')
-            if hasattr(auth_user, 'user_metadata') and auth_user.user_metadata:
-                metadata = auth_user.user_metadata
-                if 'full_name' in metadata and metadata['full_name']:
+            if hasattr(auth_user_obj, 'user_metadata') and auth_user_obj.user_metadata:
+                metadata = auth_user_obj.user_metadata
+                if 'full_name' in metadata and metadata['full_name']: 
                     display_name = metadata['full_name']
-                    print(f'Using full_name from auth metadata: {display_name}')
-                elif 'name' in metadata and metadata['name']:
+                elif 'name' in metadata and metadata['name']: 
                     display_name = metadata['name']
-                    print(f'Using name from auth metadata: {display_name}')
-                elif 'first_name' in metadata and metadata['first_name']:
-                    first_name = metadata['first_name']
-                    last_name = metadata.get('last_name', '')
-                    display_name = f"{first_name} {last_name}".strip()
-                    print(f'Using first/last name from auth metadata: {display_name}')
-        
-        # Final fallback: Extract from email
-        if display_name == "User":
-            print('Final fallback: extracting name from email')
-            if hasattr(auth_user, 'email') and auth_user.email:
-                email_name = auth_user.email.split('@')[0]
-                # Convert email username to a more readable format
+            elif hasattr(auth_user_obj, 'email') and auth_user_obj.email and display_name == "User":
+                email_name = auth_user_obj.email.split('@')[0]
                 display_name = email_name.replace('.', ' ').replace('_', ' ').title()
-                print(f'Using name from email: {display_name}')
-        
-        print(f'Final display name for {user_id}: {display_name}')
         
         return jsonify({
-            'userId': user_id,
-            'displayName': display_name,
-            'userName': display_name,  # Add userName field for Flutter compatibility
-            'email': getattr(auth_user, 'email', ''),
+            'userId': user_id, 
+            'displayName': display_name, 
+            'userName': display_name, 
+            'profileImageUrl': profile_image_url, 
+            'email': email, 
+            'phone': phone, 
             'success': True
         }), 200
-
+        
     except Exception as e:
-        print(f'Error fetching user profile: {str(e)}')
-        return jsonify({
-            "error": "Failed to fetch user profile",
-            "details": str(e)
-        }), 500
+        return jsonify({"error": "Failed to fetch user profile", "details": str(e)}), 500
+
+@user_bp.route('/api/user/profile', methods=['PUT'])
+@require_auth
+def update_user_profile():
+    user_id_param = request.args.get('userId')
+    if not user_id_param: 
+        return jsonify({"error": "userId query parameter is required"}), 400
+    
+    try: 
+        _validate_user_id(user_id_param)
+    except ValueError as e: 
+        return jsonify({"error": str(e)}), 400
+    
+    authenticated_user_id = None
+    if hasattr(request, 'user') and hasattr(request.user, 'user') and hasattr(request.user.user, 'id'):
+        authenticated_user_id = request.user.user.id
+    else:
+        return jsonify({"error": "Authentication context error"}), 500
+
+    test_user_ids = ['user123', 'test-user', 'demo-user']
+    if user_id_param not in test_user_ids and authenticated_user_id != user_id_param:
+        return jsonify({"error": "Unauthorized: User ID mismatch"}), 403
+
+    try:
+        data = request.get_json()
+        if not data: 
+            return jsonify({"error": "Request body is required"}), 400
+        
+        # Get authenticated Supabase client for RLS
+        supabase = get_authenticated_supabase()
+        
+        update_payload = {}
+        
+        # Handle name update
+        if 'name' in data and data['name'] and data['name'].strip():
+            update_payload['name'] = data['name'].strip()
+        
+        # Handle profile image upload
+        if 'profileImage' in data and data['profileImage']:
+            try:
+                uploaded_image_url = _upload_profile_image(user_id_param, data['profileImage'])
+                if uploaded_image_url:
+                    update_payload['profile_image_url'] = uploaded_image_url
+                else:
+                    return jsonify({"error": "Failed to upload profile image - no URL returned"}), 500
+            except ValueError as ve:
+                return jsonify({"error": f"Image validation error: {str(ve)}"}), 400
+            except Exception as ie:
+                return jsonify({"error": f"Image upload failed: {str(ie)}"}), 500
+        
+        if not update_payload:
+            return jsonify({"error": "No valid data to update (name or profileImage required)"}), 400
+        
+        # Add timestamp
+        update_payload['updated_at'] = datetime.utcnow().isoformat()
+        
+        # Check if user exists
+        existing_user_check = supabase.table('user').select('user_id').eq('user_id', user_id_param).maybe_single().execute()
+
+        if existing_user_check.data: 
+            try:
+                update_operation_response = supabase.table('user').update(update_payload).eq('user_id', user_id_param).execute()
+                
+                # Check for RLS issues
+                if not update_operation_response.data:
+                    return jsonify({
+                        "error": "Profile update blocked by Row Level Security",
+                        "details": "The update operation was blocked by RLS policies"
+                    }), 403
+
+            except Exception as e_update: 
+                return jsonify({"error": f"Database update error: {str(e_update)}"}), 500
+
+            # Re-fetch to verify update
+            try:
+                fetch_response = supabase.table('user').select('*').eq('user_id', user_id_param).maybe_single().execute()
+                
+                if not fetch_response.data: 
+                    return jsonify({"error": "Critical error: User disappeared after update attempt."}), 500
+                
+                updated_user_data_from_db = fetch_response.data
+                
+            except Exception as e_fetch:
+                return jsonify({"error": f"Database error after update: {str(e_fetch)}"}), 500
+            
+            return jsonify({
+                'success': True, 
+                'message': 'Profile updated successfully',
+                'displayName': updated_user_data_from_db.get('name', 'User'),
+                'profileImageUrl': updated_user_data_from_db.get('profile_image_url'), 
+                'user': updated_user_data_from_db 
+            }), 200
+            
+        else: # Create new user if not existing
+            create_payload = {
+                'user_id': user_id_param, 
+                'created_at': datetime.utcnow().isoformat(), 
+                **update_payload
+            }
+            
+            try:
+                insert_response = supabase.table('user').insert(create_payload).execute()
+
+                if not (hasattr(insert_response, 'data') and insert_response.data):
+                    return jsonify({"error": "Database insert error", "details": "Insert returned no data"}), 500
+                
+            except Exception as e_insert:
+                return jsonify({"error": f"Database insert error: {str(e_insert)}"}), 500
+            
+            # Re-fetch new user data
+            try:
+                fetch_response_after_insert = supabase.table('user').select('*').eq('user_id', user_id_param).maybe_single().execute()
+                
+                if not fetch_response_after_insert.data: 
+                    return jsonify({"error": "Critical error: User not found after creation."}), 500
+                
+                new_user_data_from_db = fetch_response_after_insert.data
+                
+            except Exception as e_fetch_insert:
+                return jsonify({"error": f"Database error after insert: {str(e_fetch_insert)}"}), 500
+            
+            return jsonify({
+                'success': True, 
+                'message': 'Profile created successfully as user did not exist.',
+                'displayName': new_user_data_from_db.get('name', 'User'),
+                'profileImageUrl': new_user_data_from_db.get('profile_image_url'),
+                'user': new_user_data_from_db 
+            }), 201
+            
+    except Exception as e:
+        return jsonify({"error": "Failed to update user profile", "details": str(e)}), 500
 
 @user_bp.route('/api/user/mood/calendar', methods=['GET'])
 @require_auth
 def get_mood_calendar():
-    """Get mood entries formatted for calendar display with emojis."""
-    
     user_id = request.args.get('userId')
-    if not user_id:
-        print('Validation error: userId query parameter is missing')
+    if not user_id: 
         return jsonify({"error": "userId query parameter is required"}), 400
-
-    try:
+    
+    try: 
         _validate_user_id(user_id)
-    except ValueError as e:
+    except ValueError as e: 
         return jsonify({"error": str(e)}), 400
-
-    # Skip user ID mismatch check for test users
+    
+    authenticated_user_id = None
+    if hasattr(request, 'user') and hasattr(request.user, 'user') and hasattr(request.user.user, 'id'):
+        authenticated_user_id = request.user.user.id
+    else:
+        return jsonify({"error": "Authentication context error"}), 500
+    
     test_user_ids = ['user123', 'test-user', 'demo-user']
-    if user_id not in test_user_ids:
-        # Verify the authenticated user matches the requested user
-        if request.user.user.id != user_id:
-            print(f'Authorization error: User ID mismatch. Auth: {request.user.user.id}, Requested: {user_id}')
-            return jsonify({"error": "Unauthorized: User ID mismatch"}), 403
-
-    # Optional date range parameters
-    start_date = request.args.get('startDate')  # Format: YYYY-MM-DD
-    end_date = request.args.get('endDate')      # Format: YYYY-MM-DD
-    limit = request.args.get('limit', 50)       # Default to 50 entries
-
+    if user_id not in test_user_ids and authenticated_user_id != user_id:
+        return jsonify({"error": "Unauthorized: User ID mismatch"}), 403
+    
+    start_date_str, end_date_str = request.args.get('startDate'), request.args.get('endDate')
+    limit_str = request.args.get('limit', '50')
+    
     try:
-        supabase: Client = current_app.supabase
+        supabase = get_authenticated_supabase()
+        query = supabase.table('mood_entries').select('mood_id, mood, created_at, analysis').eq('user_id', user_id).order('created_at', desc=True)
         
-        # Build query for mood_entries table
-        query = supabase.table('mood_entries')\
-            .select('mood_id, mood, created_at, analysis')\
-            .eq('user_id', user_id)\
-            .order('created_at', desc=True)
+        if start_date_str: 
+            query = query.gte('created_at', f'{start_date_str}T00:00:00')
+        if end_date_str: 
+            query = query.lte('created_at', f'{end_date_str}T23:59:59')
         
-        # Add date filters if provided
-        if start_date:
-            query = query.gte('created_at', f'{start_date}T00:00:00')
-        if end_date:
-            query = query.lte('created_at', f'{end_date}T23:59:59')
-        
-        # Add limit
-        query = query.limit(int(limit))
+        try: 
+            query = query.limit(int(limit_str))
+        except ValueError:
+            query = query.limit(50)
         
         response = query.execute()
         
         if response.data is not None:
-            # Process entries to create date-emoji mapping
-            date_emojis = {}
-            
+            date_emojis, processed_entries = {}, []
             for entry in response.data:
                 try:
-                    # Parse the created_at timestamp
-                    created_at = entry['created_at']
-                    if isinstance(created_at, str):
-                        entry_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                    else:
-                        entry_date = created_at
-                    
-                    # Normalize to date only (remove time component)
+                    created_at_val = entry['created_at']
+                    entry_date = datetime.fromisoformat(created_at_val.replace('Z', '+00:00')) if isinstance(created_at_val, str) else created_at_val
                     date_key = entry_date.date().isoformat()
-                    
-                    # Get emoji for this mood entry
                     emoji = mood_to_emoji(entry['mood'], entry.get('analysis'))
                     
-                    # Store the emoji for this date
-                    # If multiple entries exist for the same date, this will use the latest one
-                    # due to the DESC ordering
-                    if date_key not in date_emojis:
+                    if date_key not in date_emojis: 
                         date_emojis[date_key] = emoji
-                
-                except Exception as e:
-                    print(f'Error processing entry {entry.get("mood_id")}: {str(e)}')
-                    continue
-            
-            # Also return the raw entries for additional processing if needed
-            processed_entries = []
-            for entry in response.data:
-                try:
-                    created_at = entry['created_at']
-                    if isinstance(created_at, str):
-                        entry_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                    else:
-                        entry_date = created_at
                     
                     processed_entries.append({
-                        'id': entry['mood_id'],
-                        'mood': entry['mood'],
-                        'emoji': mood_to_emoji(entry['mood'], entry.get('analysis')),
-                        'date': entry_date.isoformat(),
-                        'dateOnly': entry_date.date().isoformat(),
+                        'id': entry['mood_id'], 
+                        'mood': entry['mood'], 
+                        'emoji': emoji,
+                        'date': entry_date.isoformat(), 
+                        'dateOnly': date_key,
                         'analysis': entry.get('analysis', {})
                     })
-                except Exception as e:
-                    print(f'Error processing entry for list: {str(e)}')
-                    continue
-            
-            print(f'Mood calendar fetched for {user_id}: {len(date_emojis)} unique dates')
+                except Exception:
+                    pass
             
             return jsonify({
-                'dateEmojis': date_emojis,
-                'entries': processed_entries,
-                'totalEntries': len(response.data),
+                'dateEmojis': date_emojis, 
+                'entries': processed_entries, 
+                'totalEntries': len(response.data), 
                 'success': True
             }), 200
         else:
             return jsonify({
-                'dateEmojis': {},
-                'entries': [],
-                'totalEntries': 0,
-                'success': True
+                'dateEmojis': {}, 
+                'entries': [], 
+                'totalEntries': 0, 
+                'success': True 
             }), 200
-
+            
     except Exception as e:
-        print(f'Error fetching mood calendar: {str(e)}')
-        return jsonify({
-            "error": "Failed to fetch mood calendar",
-            "details": str(e)
-        }), 500
+        return jsonify({"error": "Failed to fetch mood calendar", "details": str(e)}), 500
 
 @user_bp.route('/api/user/homepage', methods=['GET'])
 @require_auth
 def get_homepage_data():
-    """Get comprehensive homepage data including user greeting and mood calendar."""
-    
     user_id = request.args.get('userId')
-    if not user_id:
-        print('Validation error: userId query parameter is missing')
+    if not user_id: 
         return jsonify({"error": "userId query parameter is required"}), 400
-
-    try:
+    
+    try: 
         _validate_user_id(user_id)
-    except ValueError as e:
+    except ValueError as e: 
         return jsonify({"error": str(e)}), 400
-
-    # Skip user ID mismatch check for test users
+    
+    authenticated_user_id = None
+    if hasattr(request, 'user') and hasattr(request.user, 'user') and hasattr(request.user.user, 'id'):
+        authenticated_user_id = request.user.user.id
+    else:
+        return jsonify({"error": "Authentication context error"}), 500
+    
     test_user_ids = ['user123', 'test-user', 'demo-user']
-    if user_id not in test_user_ids:
-        # Verify the authenticated user matches the requested user
-        if request.user.user.id != user_id:
-            print(f'Authorization error: User ID mismatch. Auth: {request.user.user.id}, Requested: {user_id}')
-            return jsonify({"error": "Unauthorized: User ID mismatch"}), 403
-
-    # Optional parameters
-    days_back = request.args.get('days', 30)  # Default to 30 days of mood data
+    if user_id not in test_user_ids and authenticated_user_id != user_id:
+        return jsonify({"error": "Unauthorized: User ID mismatch"}), 403
+    
+    days_back_str = request.args.get('days', '30')
     
     try:
-        supabase: Client = current_app.supabase
+        supabase = get_authenticated_supabase()
+        auth_user_obj = request.user.user
+        display_name, profile_image_url = "User", None
         
-        # Get user profile data
-        auth_user = request.user.user
-        display_name = "Chi Hea"  # Default name for test users
-        
-        # Try to get name from user table
         try:
-            user_response = supabase.table('user')\
-                .select('name, email, phone')\
-                .eq('user_id', user_id)\
-                .execute()
-            
-            if user_response.data and len(user_response.data) > 0:
-                user_profile = user_response.data[0]
-                if user_profile.get('name') and user_profile['name'].strip():
-                    display_name = user_profile['name'].strip()
-        except Exception as e:
-            print(f'Error fetching user profile: {e}')
+            user_profile_response = supabase.table('user').select('name, email, phone, profile_image_url').eq('user_id', user_id).maybe_single().execute()
+            if user_profile_response.data:
+                user_profile_data = user_profile_response.data
+                if user_profile_data.get('name') and user_profile_data['name'].strip(): 
+                    display_name = user_profile_data['name'].strip()
+                if user_profile_data.get('profile_image_url'): 
+                    profile_image_url = user_profile_data['profile_image_url']
+        except Exception:
+            pass
         
-        # Fallback to auth metadata for real users
-        if display_name == "Chi Hea" and user_id not in test_user_ids:
-            if hasattr(auth_user, 'user_metadata') and auth_user.user_metadata:
-                metadata = auth_user.user_metadata
-                if 'full_name' in metadata and metadata['full_name']:
+        if display_name == "User" and user_id not in test_user_ids:
+            if hasattr(auth_user_obj, 'user_metadata') and auth_user_obj.user_metadata:
+                metadata = auth_user_obj.user_metadata
+                if 'full_name' in metadata and metadata['full_name']: 
                     display_name = metadata['full_name']
-                elif 'name' in metadata and metadata['name']:
+                elif 'name' in metadata and metadata['name']: 
                     display_name = metadata['name']
                 elif 'first_name' in metadata and metadata['first_name']:
-                    first_name = metadata['first_name']
-                    last_name = metadata.get('last_name', '')
-                    display_name = f"{first_name} {last_name}".strip()
+                    display_name = f"{metadata['first_name']} {metadata.get('last_name', '')}".strip()
+            elif hasattr(auth_user_obj, 'email') and auth_user_obj.email:
+                display_name = auth_user_obj.email.split('@')[0].replace('.', ' ').replace('_', ' ').title()
         
-        # Final fallback from email for real users
-        if display_name == "Chi Hea" and user_id not in test_user_ids and hasattr(auth_user, 'email') and auth_user.email:
-            email_name = auth_user.email.split('@')[0]
-            display_name = email_name.replace('.', ' ').replace('_', ' ').title()
+        end_date_dt = datetime.now()
+        try: 
+            start_date_dt = end_date_dt - timedelta(days=int(days_back_str))
+        except ValueError:
+            start_date_dt = end_date_dt - timedelta(days=30)
         
-        # Get mood calendar data
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=int(days_back))
+        mood_entries_response = supabase.table('mood_entries').select('mood_id, mood, created_at, analysis').eq('user_id', user_id).gte('created_at', start_date_dt.isoformat()).lte('created_at', end_date_dt.isoformat()).order('created_at', desc=True).execute()
         
-        mood_response = supabase.table('mood_entries')\
-            .select('mood_id, mood, created_at, analysis')\
-            .eq('user_id', user_id)\
-            .gte('created_at', start_date.isoformat())\
-            .lte('created_at', end_date.isoformat())\
-            .order('created_at', desc=True)\
-            .execute()
-        
-        # Process mood entries to create date-emoji mapping
-        date_emojis = {}
-        recent_entries = []
-
-        if mood_response.data:
-            for entry in mood_response.data:
+        date_emojis, recent_entries = {}, []
+        if mood_entries_response.data:
+            for entry in mood_entries_response.data:
                 try:
-                    # Parse the created_at timestamp
-                    created_at = entry['created_at']
-                    if isinstance(created_at, str):
-                        entry_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                    else:
-                        entry_date = created_at
-                    
-                    # Normalize to date only
+                    created_at_val = entry['created_at']
+                    entry_date = datetime.fromisoformat(created_at_val.replace('Z', '+00:00')) if isinstance(created_at_val, str) else created_at_val
                     date_key = entry_date.date().isoformat()
-                    
-                    # Get emoji from analysis or mood
                     emoji = mood_to_emoji(entry['mood'], entry.get('analysis'))
                     
-                    # Store emoji for this date (latest entry wins due to DESC ordering)
-                    if date_key not in date_emojis:
+                    if date_key not in date_emojis: 
                         date_emojis[date_key] = emoji
-                        print(f'✅ Added emoji {emoji} for date {date_key}')
                     
-                    # Add to recent entries
                     recent_entries.append({
-                        'id': entry['mood_id'],
-                        'mood': entry['mood'],
+                        'id': entry['mood_id'], 
+                        'mood': entry['mood'], 
                         'emoji': emoji,
-                        'date': entry_date.isoformat(),
+                        'date': entry_date.isoformat(), 
                         'dateOnly': date_key,
                         'analysis': entry.get('analysis', {})
                     })
-                
-                except Exception as e:
-                    print(f'❌ Error processing mood entry: {e}')
-                    continue
-
-        print(f'✅ Processed mood data: {len(date_emojis)} unique dates, {len(recent_entries)} total entries')
+                except Exception:
+                    pass
         
-        # Get today's mood specifically
-        today = date.today().isoformat()
-        today_mood = None
+        today_iso, today_mood = date.today().isoformat(), None
+        today_mood_response = supabase.table('mood_entries').select('mood_id, mood, created_at, analysis, content').eq('user_id', user_id).gte('created_at', f'{today_iso}T00:00:00').lte('created_at', f'{today_iso}T23:59:59').order('created_at', desc=True).limit(1).execute()
         
-        today_response = supabase.table('mood_entries')\
-            .select('mood_id, mood, created_at, analysis, content')\
-            .eq('user_id', user_id)\
-            .gte('created_at', f'{today}T00:00:00')\
-            .lte('created_at', f'{today}T23:59:59')\
-            .order('created_at', desc=True)\
-            .limit(1)\
-            .execute()
-        
-        if today_response.data and len(today_response.data) > 0:
-            entry = today_response.data[0]
+        if today_mood_response.data and today_mood_response.data[0]:
+            entry = today_mood_response.data[0]
             today_mood = {
-                'id': entry['mood_id'],
-                'mood': entry['mood'],
+                'id': entry['mood_id'], 
+                'mood': entry['mood'], 
                 'emoji': mood_to_emoji(entry['mood'], entry.get('analysis')),
-                'content': entry['content'],
+                'content': entry.get('content'), 
                 'createdAt': entry['created_at'],
                 'analysis': entry.get('analysis', {})
             }
         
-        # Calculate some basic stats
-        total_entries = len(recent_entries)
-        unique_dates = len(date_emojis)
-        
-        # Get current month info
-        current_month = datetime.now().strftime('%B %Y')
-        
-        print(f'Homepage data prepared for {display_name}: {total_entries} entries, {unique_dates} unique dates')
+        total_mood_entries, unique_mood_dates = len(recent_entries), len(date_emojis)
+        current_month_year = datetime.now().strftime('%B %Y')
         
         return jsonify({
             'user': {
-                'userId': user_id,
-                'displayName': display_name,
+                'userId': user_id, 
+                'displayName': display_name, 
                 'userName': display_name,
-                'email': getattr(auth_user, 'email', ''),
+                'profileImageUrl': profile_image_url, 
+                'email': getattr(auth_user_obj, 'email', ''),
                 'greeting': f"Hello {display_name}"
             },
             'moodData': {
-                'dateEmojis': date_emojis,
-                'recentEntries': recent_entries[:10],  # Last 10 entries
-                'totalEntries': total_entries,
-                'uniqueDates': unique_dates
+                'dateEmojis': date_emojis, 
+                'recentEntries': recent_entries[:10], 
+                'totalEntries': total_mood_entries, 
+                'uniqueDates': unique_mood_dates
             },
             'todayMood': today_mood,
             'calendar': {
-                'currentMonth': current_month,
+                'currentMonth': current_month_year,
                 'dateRange': {
-                    'startDate': start_date.date().isoformat(),
-                    'endDate': end_date.date().isoformat()
+                    'startDate': start_date_dt.date().isoformat(), 
+                    'endDate': end_date_dt.date().isoformat()
                 }
             },
             'success': True
         }), 200
-
+        
     except Exception as e:
-        print(f'Error fetching homepage data: {str(e)}')
-        return jsonify({
-            "error": "Failed to fetch homepage data",
-            "details": str(e)
-        }), 500
+        return jsonify({"error": "Failed to fetch homepage data", "details": str(e)}), 500
+
+@user_bp.route('/health', methods=['GET'])
+def health_check_user():
+    return jsonify({"status": "healthy", "message": "User API is running"}), 200
