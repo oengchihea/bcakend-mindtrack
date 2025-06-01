@@ -11,7 +11,6 @@ def verify_token(f):
     """Decorator to verify JWT tokens from Supabase"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        token = None
         auth_header = request.headers.get('Authorization')
         
         if auth_header:
@@ -19,8 +18,7 @@ def verify_token(f):
                 token = auth_header.split(' ')[1] if auth_header.startswith('Bearer ') else auth_header
             except IndexError:
                 return jsonify({'error': 'Invalid token format'}), 401
-        
-        if not token:
+        else:
             return jsonify({'error': 'Token is missing'}), 401
         
         try:
@@ -30,25 +28,120 @@ def verify_token(f):
                 return jsonify({'error': 'Token verification failed'}), 401
             
             request.current_user = user_response.user
+            request.auth_token = token
             
         except Exception as e:
             return jsonify({'error': 'Token verification failed'}), 401
         
         return f(*args, **kwargs)
-    
+
     return decorated_function
+
+@auth_bp.route('/api/change-password', methods=['POST'])
+@verify_token
+def change_password():
+    """Change user password with current password verification"""
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
+
+    data = request.get_json()
+    current_password = data.get('currentPassword')
+    new_password = data.get('newPassword')
+    confirm_password = data.get('confirmPassword')
+
+    # Validate input
+    if not current_password:
+        return jsonify({"error": "Current password is required"}), 400
+    if not new_password:
+        return jsonify({"error": "New password is required"}), 400
+    if not confirm_password:
+        return jsonify({"error": "Password confirmation is required"}), 400
+    
+    # Check if new passwords match
+    if new_password != confirm_password:
+        return jsonify({"error": "New passwords do not match"}), 400
+    
+    # Validate new password strength
+    if len(new_password) < 8:
+        return jsonify({"error": "New password must be at least 8 characters long"}), 400
+    
+    # Check if new password is different from current password
+    if current_password == new_password:
+        return jsonify({"error": "New password must be different from current password"}), 400
+
+    try:
+        # Get current user email
+        current_user = request.current_user
+        user_email = current_user.email
+        
+        if not user_email:
+            return jsonify({"error": "User email not found"}), 400
+
+        # Verify current password by attempting to sign in
+        try:
+            verification_response = supabase.auth.sign_in_with_password({
+                "email": user_email,
+                "password": current_password
+            })
+            
+            if not verification_response or not verification_response.user:
+                return jsonify({"error": "Current password is incorrect"}), 401
+                
+        except Exception as verify_error:
+            error_msg = str(verify_error).lower()
+            if "invalid login credentials" in error_msg or "invalid" in error_msg:
+                return jsonify({"error": "Current password is incorrect"}), 401
+            else:
+                return jsonify({"error": "Password verification failed"}), 500
+
+        # Update password using the authenticated session
+        try:
+            # Create authenticated client with current token
+            authenticated_supabase = create_client(
+                os.getenv('SUPABASE_URL'), 
+                os.getenv('SUPABASE_KEY')
+            )
+            authenticated_supabase.postgrest.auth(request.auth_token)
+            
+            # Update the password
+            update_response = authenticated_supabase.auth.update_user({
+                "password": new_password
+            })
+            
+            if not update_response or not update_response.user:
+                return jsonify({"error": "Failed to update password"}), 500
+            
+            return jsonify({
+                "message": "Password updated successfully",
+                "success": True
+            }), 200
+            
+        except Exception as update_error:
+            error_msg = str(update_error).lower()
+            if "weak password" in error_msg:
+                return jsonify({"error": "Password is too weak. Please choose a stronger password"}), 400
+            elif "same password" in error_msg:
+                return jsonify({"error": "New password must be different from current password"}), 400
+            else:
+                return jsonify({"error": f"Failed to update password: {str(update_error)}"}), 500
+                
+    except Exception as e:
+        return jsonify({
+            "error": "Password change failed",
+            "details": str(e)
+        }), 500
 
 @auth_bp.route('/api/signup', methods=['POST'])
 def api_signup():
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
-    
+
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
     name = data.get('name')
     phone = data.get('phone')
-    
+
     # Validate input
     if not email:
         return jsonify({"error": "Email is required"}), 400
@@ -60,7 +153,7 @@ def api_signup():
         return jsonify({"error": "Name is required"}), 400
     if not phone:
         return jsonify({"error": "Phone is required"}), 400
-    
+
     # Check if email already exists
     try:
         existing_user = supabase.table('user').select('email').eq('email', email).execute()
@@ -68,7 +161,7 @@ def api_signup():
             return jsonify({"error": "Email is already registered"}), 400
     except Exception as e:
         return jsonify({"error": "Error checking email", "details": str(e)}), 500
-    
+
     try:
         # Sign up with email and OTP verification
         response = supabase.auth.sign_up({
@@ -104,14 +197,14 @@ def api_signup():
 def verify_otp():
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
-    
+
     data = request.get_json()
     email = data.get('email')
     token = data.get('token')
-    
+
     if not email or not token:
         return jsonify({"error": "Email and OTP token are required"}), 400
-    
+
     try:
         response = supabase.auth.verify_otp({
             "email": email,
@@ -223,7 +316,7 @@ def reset_password():
             return jsonify({"error": "Email is required to reset password"}), 400
 
         try:
-            response = supabase.auth.reset_password_for_email(
+            supabase.auth.reset_password_for_email(
                 email,
                 {
                     "redirect_to": "http://your-app.com/reset-password"
@@ -236,13 +329,14 @@ def reset_password():
                 "email": email
             }), 200
             
-        except Exception as e:
+        except Exception:
+            # Don't reveal if email exists or not
             return jsonify({
                 "message": "If an account exists, an OTP has been sent",
                 "next_step": "verify_otp",
                 "email": email
             }), 200
-    
+
     # Step 2: Verify OTP and update password
     elif email and otp and new_password:
         try:
@@ -255,7 +349,7 @@ def reset_password():
             if not otp_response or not otp_response.user:
                 return jsonify({"error": "Invalid or expired OTP"}), 400
             
-            update_response = supabase.auth.update_user({
+            supabase.auth.update_user({
                 "password": new_password
             })
             
@@ -266,7 +360,7 @@ def reset_password():
             
         except Exception as e:
             return jsonify({"error": str(e)}), 400
-    
+
     else:
         return jsonify({
             "error": "Invalid request parameters",
