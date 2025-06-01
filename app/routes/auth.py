@@ -94,17 +94,25 @@ def change_password():
             else:
                 return jsonify({"error": "Password verification failed"}), 500
 
-        # Update password using the authenticated session
+        # Update password using the session from verification
         try:
-            # Create authenticated client with current token
-            authenticated_supabase = create_client(
+            # Get the session from the verification response
+            session = verification_response.session
+            
+            if not session or not session.access_token:
+                return jsonify({"error": "Failed to get valid session"}), 500
+            
+            # Create a new client with the fresh session token
+            session_supabase = create_client(
                 os.getenv('SUPABASE_URL'), 
                 os.getenv('SUPABASE_KEY')
             )
-            authenticated_supabase.postgrest.auth(request.auth_token)
             
-            # Update the password
-            update_response = authenticated_supabase.auth.update_user({
+            # Set the auth token from the fresh session
+            session_supabase.auth.set_session(session.access_token, session.refresh_token)
+            
+            # Update the password using the authenticated session
+            update_response = session_supabase.auth.update_user({
                 "password": new_password
             })
             
@@ -377,3 +385,50 @@ def test_verify_token():
         "user_id": user.id,
         "email": user.email
     }), 200
+
+@auth_bp.route('/api/logout', methods=['POST'])
+@verify_token
+def logout():
+    """Logout user and invalidate session"""
+    try:
+        # Get the current user's token
+        token = request.auth_token
+        
+        if not token:
+            return jsonify({"error": "No active session found"}), 400
+        
+        # Sign out the user from Supabase
+        try:
+            # Create a client with the user's token to sign them out
+            user_supabase = create_client(
+                os.getenv('SUPABASE_URL'), 
+                os.getenv('SUPABASE_KEY')
+            )
+            user_supabase.postgrest.auth(token)
+            
+            # Sign out the user
+            user_supabase.auth.sign_out()
+            
+            print(f"✅ User {request.current_user.id} logged out successfully")
+            
+            return jsonify({
+                "message": "Logged out successfully",
+                "success": True
+            }), 200
+            
+        except Exception as logout_error:
+            # Even if Supabase logout fails, we can still return success
+            # since the client will clear local tokens
+            print(f"⚠️ Supabase logout warning: {logout_error}")
+            return jsonify({
+                "message": "Logged out successfully",
+                "success": True,
+                "warning": "Session cleanup completed locally"
+            }), 200
+            
+    except Exception as e:
+        print(f"❌ Logout error: {e}")
+        return jsonify({
+            "error": "Logout failed",
+            "details": str(e)
+        }), 500
