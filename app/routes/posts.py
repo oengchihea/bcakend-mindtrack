@@ -1,0 +1,522 @@
+from flask import Blueprint, request, jsonify, current_app, g
+from datetime import datetime
+import uuid
+from functools import wraps
+
+posts_bp = Blueprint('posts', __name__, url_prefix='/api/posts')
+
+def auth_required(f):
+    """Decorator to require authentication for routes"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Get the authorization header
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'Authorization token required'}), 401
+        
+        try:
+            # Extract token from header
+            token = auth_header.split(' ')[1]
+            
+            # Verify token with Supabase
+            user = current_app.supabase.auth.get_user(token)
+            if not user.user:
+                return jsonify({'error': 'Invalid or expired token'}), 401
+            
+            # Store user info in Flask's g object for use in the route
+            g.current_user = user.user
+            g.access_token = token  # Store token for RLS
+            
+            # IMPORTANT: Set the JWT for RLS policies
+            current_app.supabase.postgrest.auth(token)
+            
+        except Exception as e:
+            print(f"Authentication error: {e}")
+            return jsonify({'error': 'Authentication failed'}), 401
+        
+        return f(*args, **kwargs)
+    return decorated_function
+
+# ============================================================================
+# POSTS ENDPOINTS
+# ============================================================================
+
+@posts_bp.route('/create', methods=['POST'])
+@auth_required
+def create_post():
+    """Create a new post"""
+    try:
+        data = request.get_json()
+        
+        # Extract user_id from authenticated user (UUID format)
+        user_id = g.current_user.id
+        
+        # Validate required fields
+        required_fields = ['title', 'content']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({'error': f'{field} is required'}), 400
+        
+        # Get user information from user table (using user_id column)
+        user_info = None
+        try:
+            user_result = current_app.supabase.table('user').select('name, profile_image_url').eq('user_id', user_id).execute()
+            if user_result.data:
+                user_info = user_result.data[0]
+                print(f"✅ Found user info: {user_info}")
+            else:
+                print(f"⚠️ No user found with user_id: {user_id}")
+        except Exception as e:
+            print(f"Warning: Could not fetch user info from user table: {e}")
+        
+        # Prepare post data
+        post_data = {
+            'post_id': str(uuid.uuid4()),
+            'user_id': user_id,  # Keep as UUID - don't convert to string
+            'title': data['title'],
+            'content': data['content'],
+            'category': data.get('category'),
+            'created_at': datetime.utcnow().isoformat(),
+            'updated_at': datetime.utcnow().isoformat()
+        }
+        
+        print(f"Creating post with user_id: {user_id} (type: {type(user_id)})")
+        print(f"Post data: {post_data}")
+        
+        # Insert into Supabase with RLS context
+        result = current_app.supabase.table('posts').insert(post_data).execute()
+        
+        if result.data:
+            # Add user information to the response
+            created_post = result.data[0]
+            if user_info:
+                created_post['user_name'] = user_info.get('name', 'Anonymous')
+                created_post['user_avatar_url'] = user_info.get('profile_image_url', '')
+            else:
+                created_post['user_name'] = 'Anonymous'
+                created_post['user_avatar_url'] = ''
+            
+            return jsonify({
+                'message': 'Post created successfully',
+                'post': created_post
+            }), 201
+        else:
+            return jsonify({'error': 'Failed to create post'}), 500
+            
+    except Exception as e:
+        print(f"Error creating post: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@posts_bp.route('/', methods=['GET'])
+@auth_required
+def get_all_posts():
+    """Get all posts (public feed) with user information"""
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        
+        # Get all posts
+        posts_result = current_app.supabase.table('posts').select(
+            'post_id, user_id, title, content, category, created_at, updated_at'
+        ).order('created_at', desc=True).range(offset, offset + limit - 1).execute()
+        
+        posts_with_user_info = []
+        
+        for post in posts_result.data:
+            # Get user info for each post from user table (using user_id column)
+            try:
+                user_result = current_app.supabase.table('user').select(
+                    'name, profile_image_url'
+                ).eq('user_id', post['user_id']).execute()
+                
+                if user_result.data:
+                    user_info = user_result.data[0]
+                    post['user_name'] = user_info.get('name', 'Anonymous')
+                    post['user_avatar_url'] = user_info.get('profile_image_url', '')
+                else:
+                    post['user_name'] = 'Anonymous'
+                    post['user_avatar_url'] = ''
+                    
+            except Exception as e:
+                print(f"Warning: Could not fetch user info for user {post['user_id']}: {e}")
+                post['user_name'] = 'Anonymous'
+                post['user_avatar_url'] = ''
+            
+            posts_with_user_info.append(post)
+        
+        return jsonify({
+            'posts': posts_with_user_info,
+            'count': len(posts_with_user_info)
+        }), 200
+        
+    except Exception as e:
+        print(f"Error getting posts: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@posts_bp.route('/<post_id>', methods=['GET'])
+@auth_required
+def get_post(post_id):
+    """Get a specific post by ID with user information"""
+    try:
+        result = current_app.supabase.table('posts').select('*').eq('post_id', post_id).execute()
+        
+        if result.data:
+            post = result.data[0]
+            
+            # Get user information from user table (using user_id column)
+            try:
+                user_result = current_app.supabase.table('user').select(
+                    'name, profile_image_url'
+                ).eq('user_id', post['user_id']).execute()
+                
+                if user_result.data:
+                    user_info = user_result.data[0]
+                    post['user_name'] = user_info.get('name', 'Anonymous')
+                    post['user_avatar_url'] = user_info.get('profile_image_url', '')
+                else:
+                    post['user_name'] = 'Anonymous'
+                    post['user_avatar_url'] = ''
+                    
+            except Exception as e:
+                print(f"Warning: Could not fetch user info: {e}")
+                post['user_name'] = 'Anonymous'
+                post['user_avatar_url'] = ''
+            
+            return jsonify({
+                'post': post
+            }), 200
+        else:
+            return jsonify({'error': 'Post not found'}), 404
+            
+    except Exception as e:
+        print(f"Error getting post: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@posts_bp.route('/<post_id>', methods=['PUT'])
+@auth_required
+def update_post(post_id):
+    """Update an existing post (only by the owner)"""
+    try:
+        data = request.get_json()
+        user_id = g.current_user.id
+        
+        # Check if post exists and belongs to the user
+        existing_post = current_app.supabase.table('posts').select('*').eq('post_id', post_id).eq('user_id', user_id).execute()
+        
+        if not existing_post.data:
+            return jsonify({'error': 'Post not found or you do not have permission to edit it'}), 404
+        
+        # Prepare update data
+        update_data = {
+            'updated_at': datetime.utcnow().isoformat()
+        }
+        
+        # Only update provided fields
+        allowed_fields = ['title', 'content', 'category']
+        for field in allowed_fields:
+            if field in data:
+                update_data[field] = data[field]
+        
+        # Update in Supabase
+        result = current_app.supabase.table('posts').update(update_data).eq('post_id', post_id).eq('user_id', user_id).execute()
+        
+        if result.data:
+            return jsonify({
+                'message': 'Post updated successfully',
+                'post': result.data[0]
+            }), 200
+        else:
+            return jsonify({'error': 'Failed to update post'}), 500
+            
+    except Exception as e:
+        print(f"Error updating post: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@posts_bp.route('/<post_id>', methods=['DELETE'])
+@auth_required
+def delete_post(post_id):
+    """Delete a post (only by the owner)"""
+    try:
+        user_id = g.current_user.id
+        
+        # Check if post exists and belongs to the user
+        existing_post = current_app.supabase.table('posts').select('*').eq('post_id', post_id).eq('user_id', user_id).execute()
+        
+        if not existing_post.data:
+            return jsonify({'error': 'Post not found or you do not have permission to delete it'}), 404
+        
+        # Delete comments first (cascade delete)
+        try:
+            current_app.supabase.table('comments').delete().eq('post_id', post_id).execute()
+        except Exception as e:
+            print(f"Warning: Could not delete comments (comments table may not exist): {e}")
+        
+        # Delete the post
+        result = current_app.supabase.table('posts').delete().eq('post_id', post_id).eq('user_id', user_id).execute()
+        
+        return jsonify({
+            'message': 'Post deleted successfully'
+        }), 200
+        
+    except Exception as e:
+        print(f"Error deleting post: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@posts_bp.route('/my-posts', methods=['GET'])
+@auth_required
+def get_my_posts():
+    """Get all posts by the authenticated user"""
+    try:
+        user_id = g.current_user.id
+        limit = request.args.get('limit', 50, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        
+        result = current_app.supabase.table('posts').select('*').eq('user_id', user_id).order('created_at', desc=True).range(offset, offset + limit - 1).execute()
+        
+        # Add user info to each post
+        for post in result.data:
+            try:
+                user_result = current_app.supabase.table('user').select(
+                    'name, profile_image_url'
+                ).eq('user_id', user_id).execute()
+                
+                if user_result.data:
+                    user_info = user_result.data[0]
+                    post['user_name'] = user_info.get('name', 'Anonymous')
+                    post['user_avatar_url'] = user_info.get('profile_image_url', '')
+                else:
+                    post['user_name'] = 'Anonymous'
+                    post['user_avatar_url'] = ''
+                    
+            except Exception as e:
+                print(f"Warning: Could not fetch user info: {e}")
+                post['user_name'] = 'Anonymous'
+                post['user_avatar_url'] = ''
+        
+        return jsonify({
+            'posts': result.data,
+            'count': len(result.data)
+        }), 200
+        
+    except Exception as e:
+        print(f"Error getting user posts: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# COMMENTS ENDPOINTS
+# ============================================================================
+
+@posts_bp.route('/<post_id>/comments', methods=['GET'])
+@auth_required
+def get_comments(post_id):
+    """Get all comments for a post"""
+    try:
+        # Check if post exists
+        post_result = current_app.supabase.table('posts').select('post_id').eq('post_id', post_id).execute()
+        if not post_result.data:
+            return jsonify({'error': 'Post not found'}), 404
+        
+        # Get comments for the post
+        result = current_app.supabase.table('comments').select('*').eq('post_id', post_id).order('created_at', desc=True).execute()
+        
+        # Add user info to each comment
+        comments_with_user_info = []
+        for comment in result.data:
+            try:
+                user_result = current_app.supabase.table('user').select(
+                    'name, profile_image_url'
+                ).eq('user_id', comment['user_id']).execute()
+                
+                if user_result.data:
+                    user_info = user_result.data[0]
+                    comment['user_name'] = user_info.get('name', 'Anonymous')
+                    comment['user_avatar_url'] = user_info.get('profile_image_url', '')
+                else:
+                    comment['user_name'] = 'Anonymous'
+                    comment['user_avatar_url'] = ''
+                    
+            except Exception as e:
+                print(f"Warning: Could not fetch user info for comment: {e}")
+                comment['user_name'] = 'Anonymous'
+                comment['user_avatar_url'] = ''
+            
+            comments_with_user_info.append(comment)
+        
+        return jsonify({
+            'comments': comments_with_user_info,
+            'count': len(comments_with_user_info)
+        }), 200
+        
+    except Exception as e:
+        print(f"Error getting comments: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@posts_bp.route('/<post_id>/comments', methods=['POST'])
+@auth_required
+def create_comment(post_id):
+    """Create a new comment on a post"""
+    try:
+        data = request.get_json()
+        user_id = g.current_user.id
+        
+        # Check if post exists
+        post_result = current_app.supabase.table('posts').select('post_id').eq('post_id', post_id).execute()
+        if not post_result.data:
+            return jsonify({'error': 'Post not found'}), 404
+        
+        # Validate required fields
+        if not data.get('text'):
+            return jsonify({'error': 'Comment text is required'}), 400
+        
+        # Get user info for the response
+        user_info = None
+        try:
+            user_result = current_app.supabase.table('user').select('name, profile_image_url').eq('user_id', user_id).execute()
+            if user_result.data:
+                user_info = user_result.data[0]
+        except Exception as e:
+            print(f"Warning: Could not fetch user info: {e}")
+        
+        # Prepare comment data
+        comment_data = {
+            'id': str(uuid.uuid4()),
+            'post_id': post_id,
+            'user_id': user_id,  # Keep as UUID
+            'text': data['text'],
+            'created_at': datetime.utcnow().isoformat(),
+            'updated_at': datetime.utcnow().isoformat()
+        }
+        
+        print(f"Creating comment with user_id: {user_id}")
+        print(f"Comment data: {comment_data}")
+        
+        # Insert into Supabase
+        result = current_app.supabase.table('comments').insert(comment_data).execute()
+        
+        if result.data:
+            created_comment = result.data[0]
+            
+            # Add user info to response
+            if user_info:
+                created_comment['user_name'] = user_info.get('name', 'Anonymous')
+                created_comment['user_avatar_url'] = user_info.get('profile_image_url', '')
+            else:
+                created_comment['user_name'] = 'Anonymous'
+                created_comment['user_avatar_url'] = ''
+            
+            return jsonify({
+                'message': 'Comment created successfully',
+                'comment': created_comment
+            }), 201
+        else:
+            return jsonify({'error': 'Failed to create comment'}), 500
+            
+    except Exception as e:
+        print(f"Error creating comment: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@posts_bp.route('/<post_id>/comments/<comment_id>', methods=['PUT'])
+@auth_required
+def update_comment(post_id, comment_id):
+    """Update a comment (only by the owner)"""
+    try:
+        data = request.get_json()
+        user_id = g.current_user.id
+        
+        # Check if comment exists and belongs to the user
+        existing_comment = current_app.supabase.table('comments').select('*').eq('id', comment_id).eq('user_id', user_id).eq('post_id', post_id).execute()
+        
+        if not existing_comment.data:
+            return jsonify({'error': 'Comment not found or you do not have permission to edit it'}), 404
+        
+        # Validate required fields
+        if not data.get('text'):
+            return jsonify({'error': 'Comment text is required'}), 400
+        
+        # Prepare update data
+        update_data = {
+            'text': data['text'],
+            'updated_at': datetime.utcnow().isoformat()
+        }
+        
+        # Update in Supabase
+        result = current_app.supabase.table('comments').update(update_data).eq('id', comment_id).eq('user_id', user_id).execute()
+        
+        if result.data:
+            return jsonify({
+                'message': 'Comment updated successfully',
+                'comment': result.data[0]
+            }), 200
+        else:
+            return jsonify({'error': 'Failed to update comment'}), 500
+            
+    except Exception as e:
+        print(f"Error updating comment: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@posts_bp.route('/<post_id>/comments/<comment_id>', methods=['DELETE'])
+@auth_required
+def delete_comment(post_id, comment_id):
+    """Delete a comment (only by the owner)"""
+    try:
+        user_id = g.current_user.id
+        
+        # Check if comment exists and belongs to the user
+        existing_comment = current_app.supabase.table('comments').select('*').eq('id', comment_id).eq('user_id', user_id).eq('post_id', post_id).execute()
+        
+        if not existing_comment.data:
+            return jsonify({'error': 'Comment not found or you do not have permission to delete it'}), 404
+        
+        # Delete from Supabase
+        result = current_app.supabase.table('comments').delete().eq('id', comment_id).eq('user_id', user_id).execute()
+        
+        return jsonify({
+            'message': 'Comment deleted successfully'
+        }), 200
+        
+    except Exception as e:
+        print(f"Error deleting comment: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# UTILITY ENDPOINTS
+# ============================================================================
+
+@posts_bp.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'ok',
+        'message': 'Posts API is running',
+        'timestamp': datetime.utcnow().isoformat()
+    }), 200
+
+@posts_bp.route('/stats', methods=['GET'])
+@auth_required
+def get_stats():
+    """Get statistics for the authenticated user"""
+    try:
+        user_id = g.current_user.id
+        
+        # Get post count
+        posts_result = current_app.supabase.table('posts').select('post_id', count='exact').eq('user_id', user_id).execute()
+        posts_count = posts_result.count if posts_result.count else 0
+        
+        # Get comment count
+        try:
+            comments_result = current_app.supabase.table('comments').select('id', count='exact').eq('user_id', user_id).execute()
+            comments_count = comments_result.count if comments_result.count else 0
+        except Exception as e:
+            print(f"Warning: Could not get comment count (comments table may not exist): {e}")
+            comments_count = 0
+        
+        return jsonify({
+            'user_id': user_id,
+            'posts_count': posts_count,
+            'comments_count': comments_count,
+            'total_activity': posts_count + comments_count
+        }), 200
+        
+    except Exception as e:
+        print(f"Error getting stats: {e}")
+        return jsonify({'error': str(e)}), 500

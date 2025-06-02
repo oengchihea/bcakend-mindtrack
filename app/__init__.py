@@ -29,11 +29,13 @@ def create_app():
     from app.routes.auth import auth_bp
     from app.routes.user import user_bp
     from app.routes.mood import mood_bp
+    from app.routes.posts import posts_bp  # Add this import
     
     app.register_blueprint(main_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(user_bp)
     app.register_blueprint(mood_bp)
+    app.register_blueprint(posts_bp)  # Add this registration
     
     # Log warning if service role key is missing
     if not app.config['SUPABASE_SERVICE_ROLE_KEY']:
