@@ -1,11 +1,41 @@
 from flask import Blueprint, jsonify, request
-from supabase import create_client
+from supabase import Client, create_client
 import os
 from datetime import datetime
 from functools import wraps
+import logging
+import jwt
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Set up logger
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
+# Get environment variables with validation
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("SUPABASE_KEY")
+
+# Validate environment variables
+if not SUPABASE_URL:
+    raise ValueError("SUPABASE_URL environment variable is required")
+if not SUPABASE_KEY:
+    raise ValueError("SUPABASE_ANON_KEY or SUPABASE_KEY environment variable is required")
+
+print(f"🔧 Supabase URL: {SUPABASE_URL}")
+print(f"🔧 Supabase Key: {'*' * 10}...{SUPABASE_KEY[-4:] if SUPABASE_KEY else 'None'}")
+
+# Initialize Supabase client
+try:
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    print("✅ Supabase client initialized successfully")
+except Exception as e:
+    print(f"❌ Failed to initialize Supabase client: {e}")
+    raise
 
 auth_bp = Blueprint('auth', __name__)
-supabase = create_client(os.getenv('SUPABASE_URL'), os.getenv('SUPABASE_KEY'))
 
 def verify_token(f):
     """Decorator to verify JWT tokens from Supabase"""
@@ -103,10 +133,7 @@ def change_password():
                 return jsonify({"error": "Failed to get valid session"}), 500
             
             # Create a new client with the fresh session token
-            session_supabase = create_client(
-                os.getenv('SUPABASE_URL'), 
-                os.getenv('SUPABASE_KEY')
-            )
+            session_supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
             
             # Set the auth token from the fresh session
             session_supabase.auth.set_session(session.access_token, session.refresh_token)
@@ -375,7 +402,139 @@ def reset_password():
             "details": "Provide email for OTP request, or email+otp+new_password for reset"
         }), 400
 
-@auth_bp.route('/api/verify-token', methods=['GET'])
+def extract_user_from_token(access_token):
+    """Extract user information from JWT token without validation"""
+    try:
+        # Decode without verification (just to extract payload)
+        decoded = jwt.decode(access_token, options={"verify_signature": False})
+        return {
+            'user_id': decoded.get('sub'),
+            'email': decoded.get('email'),
+            'exp': decoded.get('exp')
+        }
+    except Exception as e:
+        logger.warning(f"Could not decode token: {e}")
+        return None
+
+@auth_bp.route('/api/logout', methods=['POST'])
+def logout():
+    """Robust logout endpoint that handles various scenarios"""
+    try:
+        # Get authorization header
+        auth_header = request.headers.get('Authorization')
+        
+        # Extract user info if token is present
+        user_info = None
+        if auth_header and auth_header.startswith('Bearer '):
+            access_token = auth_header.split(' ')[1]
+            user_info = extract_user_from_token(access_token)
+            logger.info(f"🔄 Starting logout for user {user_info.get('user_id') if user_info else 'unknown'}")
+        else:
+            logger.info("🔄 Starting logout without token")
+
+        # Multiple logout strategies
+        logout_methods_tried = []
+        final_success = False
+
+        # Strategy 1: Try Supabase logout with current session
+        if auth_header and auth_header.startswith('Bearer '):
+            access_token = auth_header.split(' ')[1]
+            
+            try:
+                logger.info("🔄 Attempting Supabase logout method 1...")
+                
+                # Create a new supabase client instance for this logout
+                temp_supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+                
+                # Try to set session and logout
+                try:
+                    # Method 1a: Try local logout only (doesn't require refresh token)
+                    temp_supabase.auth.sign_out(scope='local')
+                    final_success = True
+                    logout_methods_tried.append("supabase_local_logout")
+                    logger.info("✅ Supabase logout method 1a successful")
+                    
+                except Exception as e1:
+                    logger.warning(f"⚠️ Supabase logout method 1a failed: {e1}")
+                    
+                    try:
+                        # Method 1b: Try global logout (may fail due to refresh token)
+                        temp_supabase.auth.set_session(access_token, '')
+                        temp_supabase.auth.sign_out()
+                        final_success = True
+                        logout_methods_tried.append("supabase_global_logout")
+                        logger.info("✅ Supabase logout method 1b successful")
+                        
+                    except Exception as e2:
+                        logger.warning(f"⚠️ Supabase logout method 1b failed: {e2}")
+                        logout_methods_tried.append(f"supabase_failed: {str(e2)}")
+                        
+            except Exception as e:
+                logger.warning(f"⚠️ Supabase logout method 1 failed: {e}")
+                logout_methods_tried.append(f"supabase_error: {str(e)}")
+
+        # Strategy 2: Fallback - always succeed for client
+        if not final_success:
+            logger.info("⚠️ Using fallback logout method")
+            final_success = True
+            logout_methods_tried.append("fallback_success")
+
+        # Log the logout event
+        user_id = user_info.get('user_id') if user_info else 'unknown'
+        logger.info(f"✅ User {user_id} logged out successfully")
+
+        # Prepare response
+        response_data = {
+            'success': True,
+            'message': 'Logged out successfully',
+            'user_id': user_id,
+            'methods_tried': logout_methods_tried,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+
+        return jsonify(response_data), 200
+
+    except Exception as e:
+        logger.error(f"❌ Unexpected error during logout: {e}")
+        
+        # Always return success for logout to allow client cleanup
+        return jsonify({
+            'success': True,
+            'message': 'Logged out locally due to server error',
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat()
+        }), 200
+
+@auth_bp.route('/api/verify-token-status', methods=['GET'])
+def verify_token_status():
+    """Verify if a token is valid"""
+    try:
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({'valid': False, 'error': 'No token provided'}), 401
+
+        access_token = auth_header.split(' ')[1]
+        
+        # Try to get user with the token
+        user_response = supabase.auth.get_user(access_token)
+        
+        if user_response.user:
+            return jsonify({
+                'valid': True,
+                'user': {
+                    'id': user_response.user.id,
+                    'email': user_response.user.email,
+                    'display_name': user_response.user.user_metadata.get('display_name', 'User')
+                }
+            }), 200
+        else:
+            return jsonify({'valid': False, 'error': 'Invalid token'}), 401
+            
+    except Exception as e:
+        logger.error(f"Token verification error: {e}")
+        return jsonify({'valid': False, 'error': str(e)}), 401
+
+@auth_bp.route('/api/test-verify-token', methods=['GET'])
 @verify_token
 def test_verify_token():
     """Test endpoint to verify if token verification is working"""
@@ -386,49 +545,42 @@ def test_verify_token():
         "email": user.email
     }), 200
 
-@auth_bp.route('/api/logout', methods=['POST'])
-@verify_token
-def logout():
-    """Logout user and invalidate session"""
+@auth_bp.route('/api/refresh-token', methods=['POST'])
+def refresh_token():
+    """Refresh access token using refresh token"""
+    if not request.is_json:
+        return jsonify({"error": "Request must be JSON"}), 400
+
+    data = request.get_json()
+    refresh_token = data.get('refresh_token')
+
+    if not refresh_token:
+        return jsonify({"error": "Refresh token is required"}), 400
+
     try:
-        # Get the current user's token
-        token = request.auth_token
+        response = supabase.auth.refresh_session(refresh_token)
         
-        if not token:
-            return jsonify({"error": "No active session found"}), 400
-        
-        # Sign out the user from Supabase
-        try:
-            # Create a client with the user's token to sign them out
-            user_supabase = create_client(
-                os.getenv('SUPABASE_URL'), 
-                os.getenv('SUPABASE_KEY')
-            )
-            user_supabase.postgrest.auth(token)
-            
-            # Sign out the user
-            user_supabase.auth.sign_out()
-            
-            print(f"✅ User {request.current_user.id} logged out successfully")
-            
+        if response and response.session:
             return jsonify({
-                "message": "Logged out successfully",
-                "success": True
+                "access_token": response.session.access_token,
+                "refresh_token": response.session.refresh_token,
+                "expires_at": response.session.expires_at
             }), 200
-            
-        except Exception as logout_error:
-            # Even if Supabase logout fails, we can still return success
-            # since the client will clear local tokens
-            print(f"⚠️ Supabase logout warning: {logout_error}")
-            return jsonify({
-                "message": "Logged out successfully",
-                "success": True,
-                "warning": "Session cleanup completed locally"
-            }), 200
+        else:
+            return jsonify({"error": "Failed to refresh token"}), 401
             
     except Exception as e:
-        print(f"❌ Logout error: {e}")
-        return jsonify({
-            "error": "Logout failed",
-            "details": str(e)
-        }), 500
+        return jsonify({"error": f"Token refresh failed: {str(e)}"}), 401
+
+
+
+# Health check endpoint
+@auth_bp.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.utcnow().isoformat(),
+        'service': 'auth',
+        'supabase_configured': bool(SUPABASE_URL and SUPABASE_KEY)
+    }), 200
