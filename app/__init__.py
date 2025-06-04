@@ -3,6 +3,7 @@ from flask_cors import CORS
 from supabase import create_client
 import os
 
+loaad_dotenv = True  
 def create_app():
     app = Flask(__name__)
     
