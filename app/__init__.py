@@ -14,6 +14,12 @@ def create_app():
         SUPABASE_KEY=os.environ.get('SUPABASE_KEY'),
         SUPABASE_SERVICE_ROLE_KEY=os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
     )
+    app.logger.info(f"SUPABASE_URL: {app.config['SUPABASE_URL']}")
+    app.logger.info(f"SUPABASE_KEY: {'set' if app.config['SUPABASE_KEY'] else 'not set'}")
+    app.logger.info(f"SUPABASE_SERVICE_ROLE_KEY: {'set' if app.config['SUPABASE_SERVICE_ROLE_KEY'] else 'not set'}")
+    
+    if not app.config['SUPABASE_URL'] or not app.config['SUPABASE_KEY']:
+        raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in environment variables")
     
     # Validate required environment variables
     if not app.config['SUPABASE_URL'] or not app.config['SUPABASE_KEY']:
