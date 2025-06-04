@@ -46,3 +46,6 @@ def create_app():
     return app
 
 app = create_app()  # WSGI app for Vercel
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
