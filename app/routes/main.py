@@ -6,4 +6,4 @@ main_bp = Blueprint('main', __name__)
 
 @main_bp.route('/')
 def index():
-    return "Welcome to the homepage"  # Or render_template('index.html')
+    return "Welcome to mindtrack api"  # Or render_template('index.html')
