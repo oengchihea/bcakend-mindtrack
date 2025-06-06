@@ -2,7 +2,8 @@ from flask import Blueprint, request, jsonify, current_app, g
 from datetime import datetime
 import uuid
 from functools import wraps
-
+from app.middleware.spam_middleware import spam_protection
+from app.services.auto_spam_detector_service import spam_detector
 posts_bp = Blueprint('posts', __name__, url_prefix='/api/posts')
 
 def auth_required(f):
@@ -38,11 +39,29 @@ def auth_required(f):
     return decorated_function
 
 # ============================================================================
-# POSTS ENDPOINTS
+# USER LIMITS ENDPOINT
+# ============================================================================
+
+@posts_bp.route('/user-limits', methods=['GET'])
+@auth_required
+def get_user_limits():
+    """Get current user's posting limits and usage"""
+    try:
+        user_id = g.current_user.id
+        limits_info = spam_detector.get_user_limits(user_id, current_app.supabase)
+        return jsonify(limits_info), 200
+        
+    except Exception as e:
+        print(f"Error getting user limits: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ============================================================================
+# POSTS ENDPOINTS WITH AUTO SPAM PROTECTION
 # ============================================================================
 
 @posts_bp.route('/create', methods=['POST'])
 @auth_required
+@spam_protection  # Automatically blocks spam
 def create_post():
     """Create a new post"""
     try:
@@ -56,6 +75,10 @@ def create_post():
         for field in required_fields:
             if not data.get(field):
                 return jsonify({'error': f'{field} is required'}), 400
+        
+        # Get spam info from middleware
+        spam_info = getattr(g, 'spam_info', {})
+        spam_score = spam_info.get('spam_score', 0)
         
         # Get user information from user table (using user_id column)
         user_info = None
@@ -77,11 +100,12 @@ def create_post():
             'content': data['content'],
             'category': data.get('category'),
             'created_at': datetime.utcnow().isoformat(),
-            'updated_at': datetime.utcnow().isoformat()
+            'updated_at': datetime.utcnow().isoformat(),
+            'spam_score': spam_score,  # Store spam score
+            'is_flagged': spam_score >= 50,  # Flag if high spam score
         }
         
-        print(f"Creating post with user_id: {user_id} (type: {type(user_id)})")
-        print(f"Post data: {post_data}")
+        print(f"Creating post with user_id: {user_id} (spam_score: {spam_score})")
         
         # Insert into Supabase with RLS context
         result = current_app.supabase.table('posts').insert(post_data).execute()
@@ -115,10 +139,10 @@ def get_all_posts():
         limit = request.args.get('limit', 50, type=int)
         offset = request.args.get('offset', 0, type=int)
         
-        # Get all posts
+        # Get all posts (excluding flagged ones for public feed)
         posts_result = current_app.supabase.table('posts').select(
-            'post_id, user_id, title, content, category, created_at, updated_at'
-        ).order('created_at', desc=True).range(offset, offset + limit - 1).execute()
+            'post_id, user_id, title, content, category, created_at, updated_at, spam_score'
+        ).eq('is_flagged', False).order('created_at', desc=True).range(offset, offset + limit - 1).execute()
         
         posts_with_user_info = []
         
@@ -194,6 +218,7 @@ def get_post(post_id):
 
 @posts_bp.route('/<post_id>', methods=['PUT'])
 @auth_required
+@spam_protection  # Add spam protection
 def update_post(post_id):
     """Update an existing post (only by the owner)"""
     try:
@@ -206,9 +231,15 @@ def update_post(post_id):
         if not existing_post.data:
             return jsonify({'error': 'Post not found or you do not have permission to edit it'}), 404
         
+        # Get spam info from middleware
+        spam_info = getattr(g, 'spam_info', {})
+        spam_score = spam_info.get('spam_score', 0)
+        
         # Prepare update data
         update_data = {
-            'updated_at': datetime.utcnow().isoformat()
+            'updated_at': datetime.utcnow().isoformat(),
+            'spam_score': spam_score,
+            'is_flagged': spam_score >= 50
         }
         
         # Only update provided fields
@@ -249,7 +280,7 @@ def delete_post(post_id):
         try:
             current_app.supabase.table('comments').delete().eq('post_id', post_id).execute()
         except Exception as e:
-            print(f"Warning: Could not delete comments (comments table may not exist): {e}")
+            print(f"Warning: Could not delete comments: {e}")
         
         # Delete the post
         result = current_app.supabase.table('posts').delete().eq('post_id', post_id).eq('user_id', user_id).execute()
@@ -303,7 +334,7 @@ def get_my_posts():
         return jsonify({'error': str(e)}), 500
 
 # ============================================================================
-# COMMENTS ENDPOINTS
+# COMMENTS ENDPOINTS WITH AUTO SPAM PROTECTION
 # ============================================================================
 
 @posts_bp.route('/<post_id>/comments', methods=['GET'])
@@ -316,8 +347,8 @@ def get_comments(post_id):
         if not post_result.data:
             return jsonify({'error': 'Post not found'}), 404
         
-        # Get comments for the post
-        result = current_app.supabase.table('comments').select('*').eq('post_id', post_id).order('created_at', desc=True).execute()
+        # Get comments for the post (excluding flagged ones)
+        result = current_app.supabase.table('comments').select('*').eq('post_id', post_id).eq('is_flagged', False).order('created_at', desc=True).execute()
         
         # Add user info to each comment
         comments_with_user_info = []
@@ -353,6 +384,7 @@ def get_comments(post_id):
 
 @posts_bp.route('/<post_id>/comments', methods=['POST'])
 @auth_required
+@spam_protection  # Add spam protection
 def create_comment(post_id):
     """Create a new comment on a post"""
     try:
@@ -367,6 +399,10 @@ def create_comment(post_id):
         # Validate required fields
         if not data.get('text'):
             return jsonify({'error': 'Comment text is required'}), 400
+        
+        # Get spam info from middleware
+        spam_info = getattr(g, 'spam_info', {})
+        spam_score = spam_info.get('spam_score', 0)
         
         # Get user info for the response
         user_info = None
@@ -384,11 +420,12 @@ def create_comment(post_id):
             'user_id': user_id,  # Keep as UUID
             'text': data['text'],
             'created_at': datetime.utcnow().isoformat(),
-            'updated_at': datetime.utcnow().isoformat()
+            'updated_at': datetime.utcnow().isoformat(),
+            'spam_score': spam_score,  # Store spam score
+            'is_flagged': spam_score >= 50,  # Flag if high spam score
         }
         
-        print(f"Creating comment with user_id: {user_id}")
-        print(f"Comment data: {comment_data}")
+        print(f"Creating comment with user_id: {user_id} (spam_score: {spam_score})")
         
         # Insert into Supabase
         result = current_app.supabase.table('comments').insert(comment_data).execute()
@@ -417,6 +454,7 @@ def create_comment(post_id):
 
 @posts_bp.route('/<post_id>/comments/<comment_id>', methods=['PUT'])
 @auth_required
+@spam_protection  # Add spam protection
 def update_comment(post_id, comment_id):
     """Update a comment (only by the owner)"""
     try:
@@ -433,10 +471,16 @@ def update_comment(post_id, comment_id):
         if not data.get('text'):
             return jsonify({'error': 'Comment text is required'}), 400
         
+        # Get spam info from middleware
+        spam_info = getattr(g, 'spam_info', {})
+        spam_score = spam_info.get('spam_score', 0)
+        
         # Prepare update data
         update_data = {
             'text': data['text'],
-            'updated_at': datetime.utcnow().isoformat()
+            'updated_at': datetime.utcnow().isoformat(),
+            'spam_score': spam_score,
+            'is_flagged': spam_score >= 50
         }
         
         # Update in Supabase
@@ -507,7 +551,7 @@ def get_stats():
             comments_result = current_app.supabase.table('comments').select('id', count='exact').eq('user_id', user_id).execute()
             comments_count = comments_result.count if comments_result.count else 0
         except Exception as e:
-            print(f"Warning: Could not get comment count (comments table may not exist): {e}")
+            print(f"Warning: Could not get comment count: {e}")
             comments_count = 0
         
         return jsonify({

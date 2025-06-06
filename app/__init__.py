@@ -2,8 +2,9 @@ from flask import Flask
 from flask_cors import CORS
 from supabase import create_client
 import os
+from dotenv import load_dotenv
 
-loaad_dotenv = True  
+load_dotenv()  
 def create_app():
     app = Flask(__name__)
     
