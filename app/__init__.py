@@ -38,9 +38,18 @@ def create_app():
     logging.info("CORS configured for /api/*.")
 
     try:
+        # Register Journal Blueprint
         from .routes.journal import journal_bp
         app.register_blueprint(journal_bp)
         logging.info("Successfully registered 'journal_bp' blueprint.")
+
+        # --- MODIFICATION START ---
+        # Register Mood Blueprint
+        from .routes.mood import mood_bp
+        app.register_blueprint(mood_bp)
+        logging.info("Successfully registered 'mood_bp' blueprint.")
+        # --- MODIFICATION END ---
+
     except ImportError as e:
         logging.error(f"CRITICAL ERROR: Failed to import or register blueprint: {e}", exc_info=True)
         raise
