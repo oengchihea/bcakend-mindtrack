@@ -77,9 +77,22 @@ def save_journal_entry():
             "prompt_text": data.get('prompt_text'),
             "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
             "questionnaire_data": data.get('questionnaire_data'),
+            "analysis_score": data.get('score'),  # Store the analysis score if provided
             "created_at": datetime.now(timezone.utc).isoformat()
         }
+        
+        # Validate score if provided
+        if entry_data["analysis_score"] is not None:
+            try:
+                score = float(entry_data["analysis_score"])
+                if not (0 <= score <= 10):
+                    return jsonify({"error": "Score must be between 0 and 10"}), 400
+                entry_data["analysis_score"] = score
+            except (ValueError, TypeError):
+                return jsonify({"error": "Invalid score format"}), 400
+
         res = client.table("journalEntry").insert(entry_data).execute()
+        current_app.logger.info(f"Successfully saved journal entry for user {user_id} with score {entry_data['analysis_score']}.")
         return jsonify({"success": True, "data": res.data[0]}), 201
     except Exception as e:
         current_app.logger.error(f"Error saving entry: {e}", exc_info=True)
