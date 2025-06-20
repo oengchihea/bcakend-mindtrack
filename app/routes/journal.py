@@ -101,7 +101,7 @@ def save_journal_entry():
             current_app.logger.error(f"Verification failed: Journal entry with journal_id {journal_entry['journal_id']} not found after insert.")
             return jsonify({"error": "Failed to verify journal_entry"}), 500
 
-        # Save score and analysis to the score table with enforced persistence
+        # Save score and analysis to the score table with strict enforcement
         score = data.get('score')
         analysis = data.get('analysis')
         if score is not None and analysis is not None:
@@ -114,23 +114,23 @@ def save_journal_entry():
             try:
                 score_res = client.table("score").insert(score_data).execute()
                 if not score_res.data:
-                    current_app.logger.error(f"Score insert failed for journal_id {journal_entry['journal_id']}. Response: {score_res}")
-                    raise Exception("Score insert failed")
-                current_app.logger.info(f"Successfully saved score {score} and analysis {json.dumps(analysis)} for journal_id {journal_entry['journal_id']}.")
+                    current_app.logger.error(f"Initial score insert failed for journal_id {journal_entry['journal_id']}. Response: {score_res}")
+                    raise Exception("Initial score insert failed")
+                current_app.logger.info(f"Successfully saved score {score} for journal_id {journal_entry['journal_id']}.")
             except Exception as e:
-                current_app.logger.error(f"Failed to save score to score table: {e}", exc_info=True)
-                # Attempt to update existing score if it exists, or re-insert
+                current_app.logger.error(f"Error inserting score: {e}", exc_info=True)
                 try:
+                    # Attempt to update or re-insert with detailed logging
                     existing_score = client.table("score").select("*").eq("journal_id", journal_entry['journal_id']).execute()
                     if existing_score.data:
                         client.table("score").update(score_data).eq("journal_id", journal_entry['journal_id']).execute()
                         current_app.logger.info(f"Updated existing score for journal_id {journal_entry['journal_id']}.")
                     else:
                         score_res = client.table("score").insert(score_data).execute()
-                        if score_res.data:
-                            current_app.logger.info(f"Score insert succeeded on second attempt for journal_id {journal_entry['journal_id']}.")
-                        else:
-                            current_app.logger.error(f"Second score insert attempt failed for journal_id {journal_entry['journal_id']}. Response: {score_res}")
+                        if not score_res.data:
+                            current_app.logger.error(f"Second score insert failed for journal_id {journal_entry['journal_id']}. Response: {score_res}")
+                            return jsonify({"error": f"Failed to save score after retry: {str(e)}"}), 500
+                        current_app.logger.info(f"Score saved on second attempt for journal_id {journal_entry['journal_id']}.")
                 except Exception as update_e:
                     current_app.logger.error(f"Failed to update or re-insert score: {update_e}", exc_info=True)
                     return jsonify({"error": f"Failed to save score: {str(update_e)}"}), 500
