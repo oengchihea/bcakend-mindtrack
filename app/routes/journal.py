@@ -82,7 +82,7 @@ def save_journal_entry():
     try:
         # Use transaction to ensure atomicity
         with client.transaction() as tx:
-            # Save journal entry
+            # Save journal entry with score and analysis if provided
             entry_data = {
                 "journal_id": str(uuid.uuid4()),
                 "user_id": user_id,
@@ -91,72 +91,20 @@ def save_journal_entry():
                 "prompt_text": data.get('prompt_text'),
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
-                "created_at": datetime.now(timezone.utc).isoformat()
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "score": data.get('score'),
+                "analysis": data.get('analysis')
             }
 
             res = client.table("journalEntry").insert(entry_data).execute()
             journal_entry = res.data[0]
-            current_app.logger.info(f"Successfully saved journal entry for user {user_id} with journal_id {journal_entry['journal_id']}.")
+            current_app.logger.info(f"Successfully saved journal entry for user {user_id} with journal_id {journal_entry['journal_id']} and score {journal_entry['score']}.")
 
             # Verify journal entry exists
             verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
             if not verify_res.data:
                 current_app.logger.error(f"Verification failed: Journal entry with journal_id {journal_entry['journal_id']} not found after insert.")
                 raise Exception("Verification failed")
-
-            # Save score and analysis if provided
-            score = data.get('score')
-            analysis = data.get('analysis')
-            if score is not None and analysis is not None:
-                current_app.logger.info(f"Attempting to save score {score} and analysis {analysis} for journal_id {journal_entry['journal_id']}.")
-                score_id = str(uuid.uuid4())  # Generate a new UUID for the score table's primary key
-                score_data = {
-                    "id": score_id,
-                    "journal_id": journal_entry['journal_id'],
-                    "score": int(float(score)),  # Ensure float to int conversion, validate range for int2
-                    "analysis": json.dumps(analysis),
-                    "created_at": journal_entry['created_at']
-                }
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        score_res = client.table("score").insert(score_data).execute()
-                        if score_res.data:
-                            current_app.logger.info(f"Successfully saved score {score} for journal_id {journal_entry['journal_id']} with id {score_id} on attempt {attempt + 1}.")
-                            break
-                        else:
-                            current_app.logger.error(f"Score insert failed for journal_id {journal_entry['journal_id']} with id {score_id} on attempt {attempt + 1}. Response: {score_res}, Data: {score_data}")
-                            if attempt < max_retries - 1:
-                                time.sleep(1)  # Wait before retry
-                            else:
-                                current_app.logger.warning(f"Failed to save score after {max_retries} attempts. Data logged: {score_data}")
-                                raise Exception("Failed to save score after retries")
-                    except APIError as e:
-                        current_app.logger.error(f"Supabase API Error inserting score for journal_id {journal_entry['journal_id']} with id {score_id} on attempt {attempt + 1}: {e.message}", exc_info=True)
-                        if attempt < max_retries - 1:
-                            time.sleep(1)  # Wait before retry
-                        else:
-                            current_app.logger.warning(f"Supabase API Error after {max_retries} attempts. Data logged: {score_data}")
-                            raise Exception(f"Supabase API Error: {str(e)}")
-                    except ValueError as e:
-                        current_app.logger.error(f"ValueError converting score {score} to int for journal_id {journal_entry['journal_id']} with id {score_id} on attempt {attempt + 1}: {e}", exc_info=True)
-                        raise Exception(f"Invalid score value: {str(e)}")
-                    except Exception as e:
-                        current_app.logger.error(f"Unexpected error inserting score for journal_id {journal_entry['journal_id']} with id {score_id} on attempt {attempt + 1}: {e}", exc_info=True)
-                        if attempt < max_retries - 1:
-                            time.sleep(1)  # Wait before retry
-                        else:
-                            current_app.logger.warning(f"Unexpected error after {max_retries} attempts. Data logged: {score_data}")
-                            raise Exception(f"Unexpected error: {str(e)}")
-
-                # Update journal_entry with score and analysis from the score table
-                score_check_res = client.table("score").select("score", "analysis").eq("journal_id", journal_entry['journal_id']).execute()
-                if score_check_res.data:
-                    journal_entry['score'] = score_check_res.data[0]['score']
-                    journal_entry['analysis'] = json.loads(score_check_res.data[0]['analysis']) if score_check_res.data[0]['analysis'] else None
-                else:
-                    journal_entry['score'] = None
-                    journal_entry['analysis'] = None
 
             return jsonify({"success": True, "data": journal_entry}), 201
     except Exception as e:
@@ -174,7 +122,7 @@ def get_score():
         return jsonify({"error": "Missing journalId parameter"}), 400
 
     try:
-        res = client.table("score").select("*").eq("journal_id", journal_id).execute()
+        res = client.table("journalEntry").select("score", "analysis").eq("journal_id", journal_id).execute()
         if res.data:
             score_data = res.data[0]
             score_data['analysis'] = json.loads(score_data['analysis']) if score_data['analysis'] else {}
