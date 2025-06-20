@@ -85,12 +85,14 @@ def save_journal_entry():
             # Prepare journal entry data with score and analysis for new submissions
             score = data.get('score')
             analysis = data.get('analysis')
-            if score is not None and not isinstance(score, (int, float)):
-                raise ValueError("Score must be a number")
             if score is not None:
-                score = int(float(score))  # Convert to integer for int2 column
-                if score < -32768 or score > 32767:
-                    raise ValueError("Score out of range for int2 (-32768 to 32767)")
+                if not isinstance(score, (int, float)):
+                    raise ValueError("Score must be a number")
+                score = float(score)  # Ensure score is a float
+                if score < 0 or score > 10:
+                    raise ValueError("Score must be between 0 and 10")
+            if analysis is not None and not isinstance(analysis, dict):
+                raise ValueError("Analysis must be a dictionary")
 
             entry_data = {
                 "journal_id": str(uuid.uuid4()),
@@ -101,8 +103,8 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": score if score is not None else None,
-                "analysis": json.dumps(analysis) if analysis else None
+                "score": score,  # Save score as float
+                "analysis": json.dumps(analysis) if analysis else None  # Serialize analysis if provided
             }
 
             # Insert new journal entry
@@ -110,7 +112,7 @@ def save_journal_entry():
             journal_entry = res.data[0]
             current_app.logger.info(f"Initial save attempt for new journal entry for user {user_id} with journal_id {journal_entry['journal_id']} and score {journal_entry['score']}.")
 
-            # Verify and enforce score for new entry with immediate retry
+            # Verify and enforce score and analysis for new entry with immediate retry
             max_retries = 3
             for attempt in range(max_retries):
                 verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
@@ -118,27 +120,32 @@ def save_journal_entry():
                     current_app.logger.error(f"Verification failed for new journal entry with journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
                     raise Exception("Verification failed for new entry")
                 journal_entry = verify_res.data[0]
-                if journal_entry['score'] == score:
-                    current_app.logger.info(f"Successfully verified new journal entry with score {journal_entry['score']} for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
+                score_matches = journal_entry['score'] == score
+                analysis_matches = (journal_entry['analysis'] == (json.dumps(analysis) if analysis else None))
+                if score_matches and analysis_matches:
+                    current_app.logger.info(f"Successfully verified new journal entry with score {journal_entry['score']} and analysis for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
                     break
                 else:
-                    current_app.logger.warning(f"Score mismatch or null for new journal_id {journal_entry['journal_id']} on attempt {attempt + 1}. Expected: {score}, Got: {journal_entry['score']}. Forcing update.")
-                    update_data = {"score": score, "analysis": json.dumps(analysis) if analysis else None}
+                    current_app.logger.warning(f"Mismatch for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}. Expected score: {score}, Got: {journal_entry['score']}. Expected analysis: {json.dumps(analysis) if analysis else None}, Got: {journal_entry['analysis']}.")
+                    update_data = {
+                        "score": score,
+                        "analysis": json.dumps(analysis) if analysis else None
+                    }
                     update_res = client.table("journalEntry").update(update_data).eq("journal_id", journal_entry['journal_id']).execute()
                     if not update_res.data:
-                        current_app.logger.error(f"Update failed for new journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
+                        current_app.logger.error(f"Update failed for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
                         if attempt < max_retries - 1:
                             time.sleep(1)  # Wait before retry
                         else:
-                            raise Exception("Failed to update score for new entry after retries")
+                            raise Exception("Failed to update score and analysis after retries")
                     journal_entry = update_res.data[0]
                     # Immediate re-verification after update
                     verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
-                    if verify_res.data and verify_res.data[0]['score'] == score:
-                        current_app.logger.info(f"Confirmed score {score} saved for journal_id {journal_entry['journal_id']} after update on attempt {attempt + 1}.")
+                    if verify_res.data and verify_res.data[0]['score'] == score and verify_res.data[0]['analysis'] == (json.dumps(analysis) if analysis else None):
+                        current_app.logger.info(f"Confirmed score {score} and analysis saved for journal_id {journal_entry['journal_id']} after update on attempt {attempt + 1}.")
                         break
             else:
-                raise Exception("Max retries reached without successful score update for new entry")
+                raise Exception("Max retries reached without successful score and analysis update")
 
             return jsonify({"success": True, "data": journal_entry}), 201
     except ValueError as ve:
