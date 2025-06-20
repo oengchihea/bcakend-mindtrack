@@ -15,19 +15,26 @@ def get_auth_client(app):
         return None, None
 
     token = auth_header.split(" ")[1]
-    try:
-        if not app.supabase:
-            current_app.logger.error("Supabase client not initialized in app context.")
-            return None, None
-        client = app.supabase
-        client.postgrest.auth(token)
-        user_response = client.auth.get_user(jwt=token)
-        if user_response.user:
-            return client, user_response.user.id
-        return None, None
-    except Exception as e:
-        current_app.logger.error(f"Auth client creation failed: {e}", exc_info=True)
-        return None, None
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            if not app.supabase:
+                current_app.logger.error("Supabase client not initialized in app context.")
+                return None, None
+            client = app.supabase
+            client.postgrest.auth(token)
+            user_response = client.auth.get_user(jwt=token)
+            if user_response.user:
+                return client, user_response.user.id
+            current_app.logger.warning(f"Auth attempt {attempt + 1} failed: No user response.")
+        except Exception as e:
+            current_app.logger.error(f"Auth client creation failed (attempt {attempt + 1}/{max_retries}): {e}", exc_info=True)
+            if attempt < max_retries - 1:
+                current_app.logger.info("Reinitializing Supabase client due to auth failure.")
+                app.supabase = create_client(app.config['SUPABASE_URL'], app.config['SUPABASE_KEY'])
+            else:
+                return None, None
+    return None, None
 
 @journal_bp.route('/api/journal/entries', methods=['GET', 'DELETE'])
 def handle_journal_entries():

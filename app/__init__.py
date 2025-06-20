@@ -27,9 +27,9 @@ def create_app():
     else:
         try:
             app.supabase = create_client(app.config['SUPABASE_URL'], app.config['SUPABASE_KEY'])
-            logging.info("Supabase client initialized successfully.")
+            logging.info("Supabase client initialized successfully with service key.")
         except Exception as e:
-            logging.error(f"CRITICAL ERROR: Failed to initialize Supabase client: {e}", exc_info=True)
+            logging.error(f"CRITICAL ERROR: Failed to initialize Supabase client with service key: {e}", exc_info=True)
             app.supabase = None
 
     # --- CORS and Blueprint Registration ---
