@@ -105,24 +105,24 @@ def save_journal_entry():
                 "analysis": json.dumps(analysis) if analysis else None
             }
 
-            # Insert new journal entry and enforce score
+            # Insert new journal entry
             res = client.table("journalEntry").insert(entry_data).execute()
             journal_entry = res.data[0]
             current_app.logger.info(f"Initial save attempt for new journal entry for user {user_id} with journal_id {journal_entry['journal_id']} and score {journal_entry['score']}.")
 
-            # Verify and ensure score is saved for new entry, retry if necessary
+            # Verify and enforce score for new entry with immediate retry
             max_retries = 3
             for attempt in range(max_retries):
                 verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
                 if not verify_res.data:
-                    current_app.logger.error(f"Verification failed: New journal entry with journal_id {journal_entry['journal_id']} not found after insert on attempt {attempt + 1}.")
+                    current_app.logger.error(f"Verification failed for new journal entry with journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
                     raise Exception("Verification failed for new entry")
                 journal_entry = verify_res.data[0]
                 if journal_entry['score'] == score:
                     current_app.logger.info(f"Successfully verified new journal entry with score {journal_entry['score']} for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
                     break
                 else:
-                    current_app.logger.warning(f"Score mismatch or null for new journal_id {journal_entry['journal_id']} on attempt {attempt + 1}. Retrying update. Expected: {score}, Got: {journal_entry['score']}")
+                    current_app.logger.warning(f"Score mismatch or null for new journal_id {journal_entry['journal_id']} on attempt {attempt + 1}. Expected: {score}, Got: {journal_entry['score']}. Forcing update.")
                     update_data = {"score": score, "analysis": json.dumps(analysis) if analysis else None}
                     update_res = client.table("journalEntry").update(update_data).eq("journal_id", journal_entry['journal_id']).execute()
                     if not update_res.data:
@@ -132,6 +132,11 @@ def save_journal_entry():
                         else:
                             raise Exception("Failed to update score for new entry after retries")
                     journal_entry = update_res.data[0]
+                    # Immediate re-verification after update
+                    verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
+                    if verify_res.data and verify_res.data[0]['score'] == score:
+                        current_app.logger.info(f"Confirmed score {score} saved for journal_id {journal_entry['journal_id']} after update on attempt {attempt + 1}.")
+                        break
             else:
                 raise Exception("Max retries reached without successful score update for new entry")
 
