@@ -69,7 +69,7 @@ def save_journal_entry():
         return jsonify({"error": "Missing required fields: content and mood"}), 400
 
     try:
-        # Save journal entry without score
+        # Save journal entry
         entry_data = {
             "journal_id": str(uuid.uuid4()),
             "user_id": user_id,
@@ -85,12 +85,12 @@ def save_journal_entry():
         journal_entry = res.data[0]
         current_app.logger.info(f"Successfully saved journal entry for user {user_id} with journal_id {journal_entry['journal_id']}.")
 
-        # Save score and analysis in the score table
+        # Save score and analysis to the score table
         if 'score' in data and 'analysis' in data:
             score_data = {
                 "journal_id": journal_entry['journal_id'],
                 "score": int(data['score']),  # Convert to int for INT2 column
-                "analysis": data['analysis']
+                "analysis": json.dumps(data['analysis'])  # Convert analysis to JSON string
             }
             try:
                 score_res = client.table("score").insert(score_data).execute()
@@ -101,7 +101,11 @@ def save_journal_entry():
                 client.table("journalEntry").delete().eq("journal_id", journal_entry['journal_id']).execute()
                 return jsonify({"error": f"Failed to save score: {str(e)}"}), 500
 
-        return jsonify({"success": True, "data": journal_entry, "score": data.get('score')}), 201
+        # Return the full entry including score and analysis if saved
+        journal_entry['score'] = data.get('score')
+        journal_entry['analysis'] = data.get('analysis')
+
+        return jsonify({"success": True, "data": journal_entry}), 201
     except Exception as e:
         current_app.logger.error(f"Error saving entry: {e}", exc_info=True)
         return jsonify({"error": f"Failed to save journal entry: {str(e)}"}), 500
@@ -119,7 +123,9 @@ def get_score():
     try:
         res = client.table("score").select("*").eq("journal_id", journal_id).execute()
         if res.data:
-            return jsonify(res.data[0]), 200
+            score_data = res.data[0]
+            score_data['analysis'] = json.loads(score_data['analysis']) if score_data['analysis'] else {}
+            return jsonify(score_data), 200
         return jsonify({"error": "Score not found"}), 404
     except Exception as e:
         current_app.logger.error(f"Error fetching score: {e}", exc_info=True)
