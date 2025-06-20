@@ -78,6 +78,7 @@ def save_journal_entry():
             "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
             "questionnaire_data": data.get('questionnaire_data'),
             "analysis_score": data.get('score'),  # Store the analysis score if provided
+            "analysis": data.get('analysis'),    # Store analysis data as jsonb
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
@@ -96,4 +97,4 @@ def save_journal_entry():
         return jsonify({"success": True, "data": res.data[0]}), 201
     except Exception as e:
         current_app.logger.error(f"Error saving entry: {e}", exc_info=True)
-        return jsonify({"error": "Failed to save journal entry"}), 500
+        return jsonify({"error": f"Failed to save journal entry: {str(e)}"}), 500

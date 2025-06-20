@@ -55,6 +55,18 @@ def create_app():
         app.register_blueprint(mood_bp)
         logging.info("Successfully registered 'mood_bp' blueprint.") # This log is crucial
 
+        from .routes.auth import auth_bp
+        app.register_blueprint(auth_bp)
+        logging.info("Successfully registered 'auth_bp' blueprint.")
+
+        from .routes.user import user_bp
+        app.register_blueprint(user_bp)
+        logging.info("Successfully registered 'user_bp' blueprint.")
+
+        from .routes.posts import posts_bp
+        app.register_blueprint(posts_bp)
+        logging.info("Successfully registered 'posts_bp' blueprint.")
+
     except ImportError as e:
         logging.error(f"CRITICAL ERROR: Failed to import or register blueprint: {e}", exc_info=True)
         # This error would prevent the routes from being available.
