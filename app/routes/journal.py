@@ -95,13 +95,13 @@ def save_journal_entry():
         journal_entry = res.data[0]
         current_app.logger.info(f"Successfully saved journal entry for user {user_id} with journal_id {journal_entry['journal_id']}.")
 
-        # Verify journal entry exists before saving score
+        # Verify journal entry exists
         verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
         if not verify_res.data:
             current_app.logger.error(f"Verification failed: Journal entry with journal_id {journal_entry['journal_id']} not found after insert.")
-            return jsonify({"error": "Failed to verify journal entry"}), 500
+            return jsonify({"error": "Failed to verify journal_entry"}), 500
 
-        # Save score and analysis to the score table
+        # Save score and analysis to the score table with retry logic
         if 'score' in data and 'analysis' in data:
             score_data = {
                 "journal_id": journal_entry['journal_id'],
@@ -114,7 +114,13 @@ def save_journal_entry():
                 if score_res.data:
                     current_app.logger.info(f"Successfully saved score {data['score']} and analysis {json.dumps(data['analysis'])} for journal_id {journal_entry['journal_id']}.")
                 else:
-                    current_app.logger.error(f"Score insert failed or returned no data for journal_id {journal_entry['journal_id']}. Response: {score_res}")
+                    current_app.logger.error(f"Score insert returned no data for journal_id {journal_entry['journal_id']}. Response: {score_res}")
+                    # Retry once
+                    score_res = client.table("score").insert(score_data).execute()
+                    if score_res.data:
+                        current_app.logger.info("Score insert succeeded on retry.")
+                    else:
+                        current_app.logger.error("Score insert failed on retry.")
             except Exception as e:
                 current_app.logger.error(f"Failed to save score to score table: {e}", exc_info=True)
                 current_app.logger.warning(f"Continuing without score save due to error: {e}")
