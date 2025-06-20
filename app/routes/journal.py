@@ -80,9 +80,9 @@ def save_journal_entry():
         return jsonify({"error": "Missing required fields: content and mood"}), 400
 
     try:
-        # Use transaction to ensure atomicity
+        # Use transaction to ensure atomicity for new entries
         with client.transaction() as tx:
-            # Prepare journal entry data with score and analysis
+            # Prepare journal entry data with score and analysis for new submissions
             score = data.get('score')
             analysis = data.get('analysis')
             if score is not None and not isinstance(score, (int, float)):
@@ -105,35 +105,35 @@ def save_journal_entry():
                 "analysis": json.dumps(analysis) if analysis else None
             }
 
-            # Insert journal entry and enforce score
+            # Insert new journal entry and enforce score
             res = client.table("journalEntry").insert(entry_data).execute()
             journal_entry = res.data[0]
-            current_app.logger.info(f"Initial save attempt for journal entry for user {user_id} with journal_id {journal_entry['journal_id']} and score {journal_entry['score']}.")
+            current_app.logger.info(f"Initial save attempt for new journal entry for user {user_id} with journal_id {journal_entry['journal_id']} and score {journal_entry['score']}.")
 
-            # Verify and ensure score is saved, retry if necessary
+            # Verify and ensure score is saved for new entry, retry if necessary
             max_retries = 3
             for attempt in range(max_retries):
                 verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
                 if not verify_res.data:
-                    current_app.logger.error(f"Verification failed: Journal entry with journal_id {journal_entry['journal_id']} not found after insert on attempt {attempt + 1}.")
-                    raise Exception("Verification failed")
+                    current_app.logger.error(f"Verification failed: New journal entry with journal_id {journal_entry['journal_id']} not found after insert on attempt {attempt + 1}.")
+                    raise Exception("Verification failed for new entry")
                 journal_entry = verify_res.data[0]
                 if journal_entry['score'] == score:
-                    current_app.logger.info(f"Successfully verified journal entry with score {journal_entry['score']} for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
+                    current_app.logger.info(f"Successfully verified new journal entry with score {journal_entry['score']} for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
                     break
                 else:
-                    current_app.logger.warning(f"Score mismatch or null for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}. Retrying update. Expected: {score}, Got: {journal_entry['score']}")
+                    current_app.logger.warning(f"Score mismatch or null for new journal_id {journal_entry['journal_id']} on attempt {attempt + 1}. Retrying update. Expected: {score}, Got: {journal_entry['score']}")
                     update_data = {"score": score, "analysis": json.dumps(analysis) if analysis else None}
                     update_res = client.table("journalEntry").update(update_data).eq("journal_id", journal_entry['journal_id']).execute()
                     if not update_res.data:
-                        current_app.logger.error(f"Update failed for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
+                        current_app.logger.error(f"Update failed for new journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
                         if attempt < max_retries - 1:
                             time.sleep(1)  # Wait before retry
                         else:
-                            raise Exception("Failed to update score after retries")
+                            raise Exception("Failed to update score for new entry after retries")
                     journal_entry = update_res.data[0]
             else:
-                raise Exception("Max retries reached without successful score update")
+                raise Exception("Max retries reached without successful score update for new entry")
 
             return jsonify({"success": True, "data": journal_entry}), 201
     except ValueError as ve:
