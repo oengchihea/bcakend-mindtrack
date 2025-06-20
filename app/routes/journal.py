@@ -130,7 +130,7 @@ def save_journal_entry():
                                 time.sleep(1)  # Wait before retry
                             else:
                                 current_app.logger.warning(f"Failed to save score after {max_retries} attempts. Data logged: {score_data}")
-                                break  # Continue with null score if all retries fail
+                                raise Exception("Failed to save score after retries")
                     except APIError as e:
                         current_app.logger.error(f"Supabase API Error inserting score for journal_id {journal_entry['journal_id']} with id {score_id} on attempt {attempt + 1}: {e.message}", exc_info=True)
                         if attempt < max_retries - 1:
@@ -149,11 +149,11 @@ def save_journal_entry():
                             current_app.logger.warning(f"Unexpected error after {max_retries} attempts. Data logged: {score_data}")
                             raise Exception(f"Unexpected error: {str(e)}")
 
-            # Update journal_entry with score and analysis only if score was successfully saved
-            journal_entry['score'] = score if 'score_res' in locals() and score_res.data else None
-            journal_entry['analysis'] = analysis if 'score_res' in locals() and score_res.data else None
+                # Update journal_entry with score and analysis only if score was successfully saved
+                journal_entry['score'] = score if score_res.data else None
+                journal_entry['analysis'] = analysis if score_res.data else None
 
-        return jsonify({"success": True, "data": journal_entry}), 201
+            return jsonify({"success": True, "data": journal_entry}), 201
     except Exception as e:
         current_app.logger.error(f"Error saving entry: {e}", exc_info=True)
         return jsonify({"error": f"Failed to save journal entry: {str(e)}"}), 500
@@ -174,7 +174,7 @@ def get_score():
             score_data = res.data[0]
             score_data['analysis'] = json.loads(score_data['analysis']) if score_data['analysis'] else {}
             return jsonify(score_data), 200
-        return jsonify({"error": "Score not found"}), 404
+        return jsonify({"score": None, "analysis": None}), 200  # Return null values instead of 404
     except Exception as e:
         current_app.logger.error(f"Error fetching score: {e}", exc_info=True)
         return jsonify({"error": "An unexpected server error occurred"}), 500
