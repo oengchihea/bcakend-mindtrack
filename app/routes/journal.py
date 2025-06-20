@@ -109,7 +109,9 @@ def save_journal_entry():
             analysis = data.get('analysis')
             if score is not None and analysis is not None:
                 current_app.logger.info(f"Attempting to save score {score} and analysis {analysis} for journal_id {journal_entry['journal_id']}.")
+                score_id = str(uuid.uuid4())  # Generate a new UUID for the score table's primary key
                 score_data = {
+                    "id": score_id,
                     "journal_id": journal_entry['journal_id'],
                     "score": int(float(score)),  # Ensure float to int conversion, validate range for int2
                     "analysis": json.dumps(analysis),
@@ -120,28 +122,31 @@ def save_journal_entry():
                     try:
                         score_res = client.table("score").insert(score_data).execute()
                         if score_res.data:
-                            current_app.logger.info(f"Successfully saved score {score} for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
+                            current_app.logger.info(f"Successfully saved score {score} for journal_id {journal_entry['journal_id']} with id {score_id} on attempt {attempt + 1}.")
                             break
                         else:
-                            current_app.logger.error(f"Score insert failed for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}. Response: {score_res}, Data: {score_data}")
+                            current_app.logger.error(f"Score insert failed for journal_id {journal_entry['journal_id']} with id {score_id} on attempt {attempt + 1}. Response: {score_res}, Data: {score_data}")
                             if attempt < max_retries - 1:
                                 time.sleep(1)  # Wait before retry
                             else:
-                                raise Exception("Score insert failed after retries")
+                                current_app.logger.warning(f"Failed to save score after {max_retries} attempts. Data logged: {score_data}")
+                                break  # Continue with null score if all retries fail
                     except APIError as e:
-                        current_app.logger.error(f"Supabase API Error inserting score for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}: {e.message}", exc_info=True)
+                        current_app.logger.error(f"Supabase API Error inserting score for journal_id {journal_entry['journal_id']} with id {score_id} on attempt {attempt + 1}: {e.message}", exc_info=True)
                         if attempt < max_retries - 1:
                             time.sleep(1)  # Wait before retry
                         else:
+                            current_app.logger.warning(f"Supabase API Error after {max_retries} attempts. Data logged: {score_data}")
                             raise Exception(f"Supabase API Error: {str(e)}")
                     except ValueError as e:
-                        current_app.logger.error(f"ValueError converting score {score} to int for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}: {e}", exc_info=True)
+                        current_app.logger.error(f"ValueError converting score {score} to int for journal_id {journal_entry['journal_id']} with id {score_id} on attempt {attempt + 1}: {e}", exc_info=True)
                         raise Exception(f"Invalid score value: {str(e)}")
                     except Exception as e:
-                        current_app.logger.error(f"Unexpected error inserting score for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}: {e}", exc_info=True)
+                        current_app.logger.error(f"Unexpected error inserting score for journal_id {journal_entry['journal_id']} with id {score_id} on attempt {attempt + 1}: {e}", exc_info=True)
                         if attempt < max_retries - 1:
                             time.sleep(1)  # Wait before retry
                         else:
+                            current_app.logger.warning(f"Unexpected error after {max_retries} attempts. Data logged: {score_data}")
                             raise Exception(f"Unexpected error: {str(e)}")
 
             # Update journal_entry with score and analysis only if score was successfully saved
