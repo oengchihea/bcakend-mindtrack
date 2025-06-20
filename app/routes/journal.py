@@ -8,7 +8,7 @@ from postgrest import APIError
 
 journal_bp = Blueprint('journal_bp', __name__)
 
-def get_auth_client():
+def get_auth_client(app):
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
         current_app.logger.warning("Auth header missing or malformed.")
@@ -16,7 +16,10 @@ def get_auth_client():
 
     token = auth_header.split(" ")[1]
     try:
-        client = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_KEY"))
+        if not app.supabase:
+            current_app.logger.error("Supabase client not initialized in app context.")
+            return None, None
+        client = app.supabase  # Use the app-level client
         client.postgrest.auth(token)
         user_response = client.auth.get_user(jwt=token)
         if user_response.user:
@@ -29,7 +32,7 @@ def get_auth_client():
 @journal_bp.route('/api/journal/entries', methods=['GET', 'DELETE'])
 def handle_journal_entries():
     current_app.logger.info(f"Route /api/journal/entries hit with method: {request.method}")
-    client, user_id = get_auth_client()
+    client, user_id = get_auth_client(current_app._get_current_object())
     if not client or not user_id:
         return jsonify({"error": "Authentication failed"}), 401
 
@@ -60,7 +63,7 @@ def handle_journal_entries():
 
 @journal_bp.route('/api/journalEntry', methods=['POST'])
 def save_journal_entry():
-    client, user_id = get_auth_client()
+    client, user_id = get_auth_client(current_app._get_current_object())
     if not client or not user_id:
         return jsonify({"error": "Authentication failed"}), 401
 
@@ -113,7 +116,7 @@ def save_journal_entry():
 
 @journal_bp.route('/api/score', methods=['GET'])
 def get_score():
-    client, user_id = get_auth_client()
+    client, user_id = get_auth_client(current_app._get_current_object())
     if not client or not user_id:
         return jsonify({"error": "Authentication failed"}), 401
 
