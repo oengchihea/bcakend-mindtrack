@@ -107,6 +107,7 @@ def save_journal_entry():
             score = data.get('score')
             analysis = data.get('analysis')
             if score is not None and analysis is not None:
+                current_app.logger.info(f"Attempting to save score {score} and analysis {analysis} for journal_id {journal_entry['journal_id']}.")
                 score_data = {
                     "journal_id": journal_entry['journal_id'],
                     "score": int(float(score)),  # Ensure float to int conversion
@@ -116,16 +117,16 @@ def save_journal_entry():
                 try:
                     score_res = client.table("score").insert(score_data).execute()
                     if not score_res.data:
-                        current_app.logger.error(f"Initial score insert failed for journal_id {journal_entry['journal_id']}. Response: {score_res}")
-                        raise Exception("Initial score insert failed")
+                        current_app.logger.error(f"Score insert failed for journal_id {journal_entry['journal_id']}. Response: {score_res}")
+                        raise Exception("Score insert failed")
                     current_app.logger.info(f"Successfully saved score {score} for journal_id {journal_entry['journal_id']}.")
                 except Exception as e:
                     current_app.logger.error(f"Error inserting score: {e}", exc_info=True)
                     raise Exception(f"Failed to save score: {str(e)}")
 
-            # Update journal_entry with score and analysis
-            journal_entry['score'] = score
-            journal_entry['analysis'] = analysis
+            # Update journal_entry with score and analysis only if score was successfully saved
+            journal_entry['score'] = score if score_res.data else None
+            journal_entry['analysis'] = analysis if score_res.data else None
 
         return jsonify({"success": True, "data": journal_entry}), 201
     except Exception as e:
