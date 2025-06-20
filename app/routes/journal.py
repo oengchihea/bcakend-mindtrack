@@ -82,7 +82,16 @@ def save_journal_entry():
     try:
         # Use transaction to ensure atomicity
         with client.transaction() as tx:
-            # Save journal entry with score and analysis if provided
+            # Prepare journal entry data with score and analysis
+            score = data.get('score')
+            analysis = data.get('analysis')
+            if score is not None and not isinstance(score, (int, float)):
+                raise ValueError("Score must be a number")
+            if score is not None:
+                score = int(float(score))  # Convert to integer for int2 column
+                if score < -32768 or score > 32767:
+                    raise ValueError("Score out of range for int2 (-32768 to 32767)")
+
             entry_data = {
                 "journal_id": str(uuid.uuid4()),
                 "user_id": user_id,
@@ -92,21 +101,26 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": data.get('score'),
-                "analysis": data.get('analysis')
+                "score": score if score is not None else None,
+                "analysis": json.dumps(analysis) if analysis else None
             }
 
+            # Insert journal entry
             res = client.table("journalEntry").insert(entry_data).execute()
             journal_entry = res.data[0]
             current_app.logger.info(f"Successfully saved journal entry for user {user_id} with journal_id {journal_entry['journal_id']} and score {journal_entry['score']}.")
 
-            # Verify journal entry exists
+            # Verify and update with fresh data from the database
             verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
             if not verify_res.data:
                 current_app.logger.error(f"Verification failed: Journal entry with journal_id {journal_entry['journal_id']} not found after insert.")
                 raise Exception("Verification failed")
+            journal_entry = verify_res.data[0]  # Use the verified data from the database
 
             return jsonify({"success": True, "data": journal_entry}), 201
+    except ValueError as ve:
+        current_app.logger.error(f"Validation error saving entry: {ve}", exc_info=True)
+        return jsonify({"error": f"Validation error: {str(ve)}"}), 400
     except Exception as e:
         current_app.logger.error(f"Error saving entry: {e}", exc_info=True)
         return jsonify({"error": f"Failed to save journal entry: {str(e)}"}), 500
@@ -127,7 +141,7 @@ def get_score():
             score_data = res.data[0]
             score_data['analysis'] = json.loads(score_data['analysis']) if score_data['analysis'] else {}
             return jsonify(score_data), 200
-        return jsonify({"score": None, "analysis": None}), 200  # Return null values instead of 404
+        return jsonify({"score": None, "analysis": None}), 200  # Return null values
     except Exception as e:
         current_app.logger.error(f"Error fetching score: {e}", exc_info=True)
         return jsonify({"error": "An unexpected server error occurred"}), 500
