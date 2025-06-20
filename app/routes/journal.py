@@ -19,7 +19,7 @@ def get_auth_client(app):
         if not app.supabase:
             current_app.logger.error("Supabase client not initialized in app context.")
             return None, None
-        client = app.supabase  # Use the app-level client
+        client = app.supabase
         client.postgrest.auth(token)
         user_response = client.auth.get_user(jwt=token)
         if user_response.user:
@@ -88,12 +88,19 @@ def save_journal_entry():
         journal_entry = res.data[0]
         current_app.logger.info(f"Successfully saved journal entry for user {user_id} with journal_id {journal_entry['journal_id']}.")
 
+        # Verify journal entry exists before saving score
+        verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
+        if not verify_res.data:
+            current_app.logger.error(f"Verification failed: Journal entry with journal_id {journal_entry['journal_id']} not found after insert.")
+            return jsonify({"error": "Failed to verify journal entry"}), 500
+
         # Save score and analysis to the score table
         if 'score' in data and 'analysis' in data:
             score_data = {
                 "journal_id": journal_entry['journal_id'],
                 "score": int(float(data['score'])),  # Ensure float to int conversion
-                "analysis": json.dumps(data['analysis'])
+                "analysis": json.dumps(data['analysis']),
+                "created_at": datetime.now(timezone.utc).isoformat()
             }
             try:
                 score_res = client.table("score").insert(score_data).execute()
