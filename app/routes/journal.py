@@ -149,9 +149,14 @@ def save_journal_entry():
                             current_app.logger.warning(f"Unexpected error after {max_retries} attempts. Data logged: {score_data}")
                             raise Exception(f"Unexpected error: {str(e)}")
 
-                # Update journal_entry with score and analysis only if score was successfully saved
-                journal_entry['score'] = score if score_res.data else None
-                journal_entry['analysis'] = analysis if score_res.data else None
+                # Update journal_entry with score and analysis from the score table
+                score_check_res = client.table("score").select("score", "analysis").eq("journal_id", journal_entry['journal_id']).execute()
+                if score_check_res.data:
+                    journal_entry['score'] = score_check_res.data[0]['score']
+                    journal_entry['analysis'] = json.loads(score_check_res.data[0]['analysis']) if score_check_res.data[0]['analysis'] else None
+                else:
+                    journal_entry['score'] = None
+                    journal_entry['analysis'] = None
 
             return jsonify({"success": True, "data": journal_entry}), 201
     except Exception as e:
