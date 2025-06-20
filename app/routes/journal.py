@@ -89,7 +89,7 @@ def save_journal_entry():
         if 'score' in data and 'analysis' in data:
             score_data = {
                 "journal_id": journal_entry['journal_id'],
-                "score": data['score'],
+                "score": int(data['score']),  # Convert to int for INT2 column
                 "analysis": data['analysis']
             }
             try:
@@ -97,7 +97,7 @@ def save_journal_entry():
                 current_app.logger.info(f"Successfully saved score {data['score']} and analysis {json.dumps(data['analysis'])} for journal_id {journal_entry['journal_id']}.")
             except Exception as e:
                 current_app.logger.error(f"Error saving score: {e}", exc_info=True)
-                # Rollback the journal entry if score save fails (optional)
+                # Rollback the journal entry if score save fails
                 client.table("journalEntry").delete().eq("journal_id", journal_entry['journal_id']).execute()
                 return jsonify({"error": f"Failed to save score: {str(e)}"}), 500
 
