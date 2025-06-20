@@ -88,8 +88,10 @@ def save_journal_entry():
                 score = float(entry_data["analysis_score"])
                 if not (0 <= score <= 10):
                     return jsonify({"error": "Score must be between 0 and 10"}), 400
-                entry_data["analysis_score"] = score
+                entry_data["analysis_score"] = int(score)  # Convert to int for int2 column
+                current_app.logger.info(f"Converted score to int: {entry_data['analysis_score']}")
             except (ValueError, TypeError):
+                current_app.logger.warning(f"Invalid score format received: {data.get('score')}")
                 return jsonify({"error": "Invalid score format"}), 400
 
         # Ensure analysis is a valid JSON object if provided
@@ -97,8 +99,12 @@ def save_journal_entry():
             if not isinstance(entry_data["analysis"], dict):
                 try:
                     entry_data["analysis"] = json.loads(entry_data["analysis"])
+                    current_app.logger.info(f"Parsed analysis JSON: {json.dumps(entry_data['analysis'])}")
                 except json.JSONDecodeError:
+                    current_app.logger.error(f"Invalid analysis JSON format: {data.get('analysis')}")
                     return jsonify({"error": "Invalid analysis format, must be JSON"}), 400
+            else:
+                current_app.logger.info(f"Using raw analysis data: {json.dumps(entry_data['analysis'])}")
 
         res = client.table("journalEntry").insert(entry_data).execute()
         current_app.logger.info(f"Successfully saved journal entry for user {user_id} with score {entry_data['analysis_score']} and analysis {json.dumps(entry_data['analysis'])}.")
