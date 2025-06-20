@@ -103,32 +103,29 @@ def save_journal_entry():
                 current_app.logger.error(f"Verification failed: Journal entry with journal_id {journal_entry['journal_id']} not found after insert.")
                 raise Exception("Verification failed")
 
-            # Save score and analysis only if provided and from June 21, 2025, 00:00 UTC onwards
+            # Save score and analysis if provided
             score = data.get('score')
             analysis = data.get('analysis')
             if score is not None and analysis is not None:
-                created_at = datetime.fromisoformat(journal_entry['created_at'])
-                should_save_score = created_at >= datetime(2025, 6, 21, tzinfo=timezone.utc)
-                if should_save_score:
-                    score_data = {
-                        "journal_id": journal_entry['journal_id'],
-                        "score": int(float(score)),  # Ensure float to int conversion
-                        "analysis": json.dumps(analysis),
-                        "created_at": journal_entry['created_at']
-                    }
-                    try:
-                        score_res = client.table("score").insert(score_data).execute()
-                        if not score_res.data:
-                            current_app.logger.error(f"Initial score insert failed for journal_id {journal_entry['journal_id']}. Response: {score_res}")
-                            raise Exception("Initial score insert failed")
-                        current_app.logger.info(f"Successfully saved score {score} for journal_id {journal_entry['journal_id']}.")
-                    except Exception as e:
-                        current_app.logger.error(f"Error inserting score: {e}", exc_info=True)
-                        raise Exception(f"Failed to save score: {str(e)}")
+                score_data = {
+                    "journal_id": journal_entry['journal_id'],
+                    "score": int(float(score)),  # Ensure float to int conversion
+                    "analysis": json.dumps(analysis),
+                    "created_at": journal_entry['created_at']
+                }
+                try:
+                    score_res = client.table("score").insert(score_data).execute()
+                    if not score_res.data:
+                        current_app.logger.error(f"Initial score insert failed for journal_id {journal_entry['journal_id']}. Response: {score_res}")
+                        raise Exception("Initial score insert failed")
+                    current_app.logger.info(f"Successfully saved score {score} for journal_id {journal_entry['journal_id']}.")
+                except Exception as e:
+                    current_app.logger.error(f"Error inserting score: {e}", exc_info=True)
+                    raise Exception(f"Failed to save score: {str(e)}")
 
             # Update journal_entry with score and analysis
-            journal_entry['score'] = score if should_save_score else None
-            journal_entry['analysis'] = analysis if should_save_score else None
+            journal_entry['score'] = score
+            journal_entry['analysis'] = analysis
 
         return jsonify({"success": True, "data": journal_entry}), 201
     except Exception as e:
