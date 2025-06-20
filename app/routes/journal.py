@@ -101,33 +101,35 @@ def save_journal_entry():
             current_app.logger.error(f"Verification failed: Journal entry with journal_id {journal_entry['journal_id']} not found after insert.")
             return jsonify({"error": "Failed to verify journal_entry"}), 500
 
-        # Save score and analysis to the score table with retry logic
-        if 'score' in data and 'analysis' in data:
+        # Save score and analysis to the score table with improved error handling
+        score = data.get('score', 5.0)  # Default to 5.0 if not provided
+        analysis = data.get('analysis', {'sentiment': 'neutral', 'themes': [], 'insights': 'No analysis available'})
+        if score is not None and analysis is not None:
             score_data = {
                 "journal_id": journal_entry['journal_id'],
-                "score": int(float(data['score'])),  # Ensure float to int conversion
-                "analysis": json.dumps(data['analysis']),
+                "score": int(float(score)),  # Ensure float to int conversion
+                "analysis": json.dumps(analysis),
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
             try:
                 score_res = client.table("score").insert(score_data).execute()
                 if score_res.data:
-                    current_app.logger.info(f"Successfully saved score {data['score']} and analysis {json.dumps(data['analysis'])} for journal_id {journal_entry['journal_id']}.")
+                    current_app.logger.info(f"Successfully saved score {score} and analysis {json.dumps(analysis)} for journal_id {journal_entry['journal_id']}.")
                 else:
                     current_app.logger.error(f"Score insert returned no data for journal_id {journal_entry['journal_id']}. Response: {score_res}")
-                    # Retry once
+                    # Retry with detailed logging
                     score_res = client.table("score").insert(score_data).execute()
                     if score_res.data:
                         current_app.logger.info("Score insert succeeded on retry.")
                     else:
-                        current_app.logger.error("Score insert failed on retry.")
+                        current_app.logger.error("Score insert failed on retry. Response: ${score_res}")
             except Exception as e:
                 current_app.logger.error(f"Failed to save score to score table: {e}", exc_info=True)
                 current_app.logger.warning(f"Continuing without score save due to error: {e}")
 
         # Update journal_entry with score and analysis from request
-        journal_entry['score'] = data.get('score', None)
-        journal_entry['analysis'] = data.get('analysis', None)
+        journal_entry['score'] = score
+        journal_entry['analysis'] = analysis
 
         return jsonify({"success": True, "data": journal_entry}), 201
     except Exception as e:
