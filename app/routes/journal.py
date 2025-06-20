@@ -79,65 +79,56 @@ def save_journal_entry():
         return jsonify({"error": "Missing required fields: content and mood"}), 400
 
     try:
-        # Save journal entry
-        entry_data = {
-            "journal_id": str(uuid.uuid4()),
-            "user_id": user_id,
-            "entry_text": data['content'],
-            "mood": data['mood'],
-            "prompt_text": data.get('prompt_text'),
-            "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
-            "questionnaire_data": data.get('questionnaire_data'),
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-
-        res = client.table("journalEntry").insert(entry_data).execute()
-        journal_entry = res.data[0]
-        current_app.logger.info(f"Successfully saved journal entry for user {user_id} with journal_id {journal_entry['journal_id']}.")
-
-        # Verify journal entry exists
-        verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
-        if not verify_res.data:
-            current_app.logger.error(f"Verification failed: Journal entry with journal_id {journal_entry['journal_id']} not found after insert.")
-            return jsonify({"error": "Failed to verify journal_entry"}), 500
-
-        # Save score and analysis to the score table with strict enforcement
-        score = data.get('score')
-        analysis = data.get('analysis')
-        if score is not None and analysis is not None:
-            score_data = {
-                "journal_id": journal_entry['journal_id'],
-                "score": int(float(score)),  # Ensure float to int conversion
-                "analysis": json.dumps(analysis),
+        # Use transaction to ensure atomicity
+        with client.transaction() as tx:
+            # Save journal entry
+            entry_data = {
+                "journal_id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "entry_text": data['content'],
+                "mood": data['mood'],
+                "prompt_text": data.get('prompt_text'),
+                "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
+                "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
-            try:
-                score_res = client.table("score").insert(score_data).execute()
-                if not score_res.data:
-                    current_app.logger.error(f"Initial score insert failed for journal_id {journal_entry['journal_id']}. Response: {score_res}")
-                    raise Exception("Initial score insert failed")
-                current_app.logger.info(f"Successfully saved score {score} for journal_id {journal_entry['journal_id']}.")
-            except Exception as e:
-                current_app.logger.error(f"Error inserting score: {e}", exc_info=True)
-                try:
-                    # Attempt to update or re-insert with detailed logging
-                    existing_score = client.table("score").select("*").eq("journal_id", journal_entry['journal_id']).execute()
-                    if existing_score.data:
-                        client.table("score").update(score_data).eq("journal_id", journal_entry['journal_id']).execute()
-                        current_app.logger.info(f"Updated existing score for journal_id {journal_entry['journal_id']}.")
-                    else:
+
+            res = client.table("journalEntry").insert(entry_data).execute()
+            journal_entry = res.data[0]
+            current_app.logger.info(f"Successfully saved journal entry for user {user_id} with journal_id {journal_entry['journal_id']}.")
+
+            # Verify journal entry exists
+            verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
+            if not verify_res.data:
+                current_app.logger.error(f"Verification failed: Journal entry with journal_id {journal_entry['journal_id']} not found after insert.")
+                raise Exception("Verification failed")
+
+            # Save score and analysis only if provided and from June 21, 2025 onwards
+            score = data.get('score')
+            analysis = data.get('analysis')
+            if score is not None and analysis is not None:
+                created_at = datetime.fromisoformat(journal_entry['created_at'])
+                should_save_score = created_at >= datetime(2025, 6, 21, tzinfo=timezone.utc)
+                if should_save_score:
+                    score_data = {
+                        "journal_id": journal_entry['journal_id'],
+                        "score": int(float(score)),  # Ensure float to int conversion
+                        "analysis": json.dumps(analysis),
+                        "created_at": journal_entry['created_at']
+                    }
+                    try:
                         score_res = client.table("score").insert(score_data).execute()
                         if not score_res.data:
-                            current_app.logger.error(f"Second score insert failed for journal_id {journal_entry['journal_id']}. Response: {score_res}")
-                            return jsonify({"error": f"Failed to save score after retry: {str(e)}"}), 500
-                        current_app.logger.info(f"Score saved on second attempt for journal_id {journal_entry['journal_id']}.")
-                except Exception as update_e:
-                    current_app.logger.error(f"Failed to update or re-insert score: {update_e}", exc_info=True)
-                    return jsonify({"error": f"Failed to save score: {str(update_e)}"}), 500
+                            current_app.logger.error(f"Initial score insert failed for journal_id {journal_entry['journal_id']}. Response: {score_res}")
+                            raise Exception("Initial score insert failed")
+                        current_app.logger.info(f"Successfully saved score {score} for journal_id {journal_entry['journal_id']}.")
+                    except Exception as e:
+                        current_app.logger.error(f"Error inserting score: {e}", exc_info=True)
+                        raise Exception(f"Failed to save score: {str(e)}")
 
-        # Update journal_entry with score and analysis from request
-        journal_entry['score'] = score
-        journal_entry['analysis'] = analysis
+            # Update journal_entry with score and analysis
+            journal_entry['score'] = score if should_save_score else None
+            journal_entry['analysis'] = analysis if should_save_score else None
 
         return jsonify({"success": True, "data": journal_entry}), 201
     except Exception as e:
