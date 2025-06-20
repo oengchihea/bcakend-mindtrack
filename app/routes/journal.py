@@ -91,8 +91,8 @@ def save_journal_entry():
                 entry_data["analysis_score"] = int(score)  # Convert to int for int2 column
                 current_app.logger.info(f"Converted score to int: {entry_data['analysis_score']}")
             except (ValueError, TypeError):
-                current_app.logger.warning(f"Invalid score format received: {data.get('score')}")
-                return jsonify({"error": "Invalid score format"}), 400
+                current_app.logger.warning(f"Invalid score format received: {data.get('score')}, using default 0")
+                entry_data["analysis_score"] = 0  # Fallback to 0 if invalid
 
         # Ensure analysis is a valid JSON object if provided
         if entry_data["analysis"] is not None:
@@ -101,8 +101,8 @@ def save_journal_entry():
                     entry_data["analysis"] = json.loads(entry_data["analysis"])
                     current_app.logger.info(f"Parsed analysis JSON: {json.dumps(entry_data['analysis'])}")
                 except json.JSONDecodeError:
-                    current_app.logger.error(f"Invalid analysis JSON format: {data.get('analysis')}")
-                    return jsonify({"error": "Invalid analysis format, must be JSON"}), 400
+                    current_app.logger.error(f"Invalid analysis JSON format: {data.get('analysis')}, using empty dict")
+                    entry_data["analysis"] = {}  # Fallback to empty dict if invalid
             else:
                 current_app.logger.info(f"Using raw analysis data: {json.dumps(entry_data['analysis'])}")
 
