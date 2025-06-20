@@ -69,6 +69,7 @@ def save_journal_entry():
         return jsonify({"error": "Missing required fields: content and mood"}), 400
 
     try:
+        # Save journal entry without score
         entry_data = {
             "journal_id": str(uuid.uuid4()),
             "user_id": user_id,
@@ -77,38 +78,49 @@ def save_journal_entry():
             "prompt_text": data.get('prompt_text'),
             "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
             "questionnaire_data": data.get('questionnaire_data'),
-            "analysis_score": data.get('score'),  # Ensure score is stored
-            "analysis": data.get('analysis'),    # Ensure analysis is stored as jsonb
             "created_at": datetime.now(timezone.utc).isoformat()
         }
-        
-        # Validate and convert score if provided
-        if entry_data["analysis_score"] is not None:
-            try:
-                score = float(entry_data["analysis_score"])
-                if not (0 <= score <= 10):
-                    return jsonify({"error": "Score must be between 0 and 10"}), 400
-                entry_data["analysis_score"] = int(score)  # Convert to int for int2 column
-                current_app.logger.info(f"Converted score to int: {entry_data['analysis_score']}")
-            except (ValueError, TypeError):
-                current_app.logger.warning(f"Invalid score format received: {data.get('score')}, using default 0")
-                entry_data["analysis_score"] = 0  # Fallback to 0 if invalid
-
-        # Ensure analysis is a valid JSON object if provided
-        if entry_data["analysis"] is not None:
-            if not isinstance(entry_data["analysis"], dict):
-                try:
-                    entry_data["analysis"] = json.loads(entry_data["analysis"])
-                    current_app.logger.info(f"Parsed analysis JSON: {json.dumps(entry_data['analysis'])}")
-                except json.JSONDecodeError:
-                    current_app.logger.error(f"Invalid analysis JSON format: {data.get('analysis')}, using empty dict")
-                    entry_data["analysis"] = {}  # Fallback to empty dict if invalid
-            else:
-                current_app.logger.info(f"Using raw analysis data: {json.dumps(entry_data['analysis'])}")
 
         res = client.table("journalEntry").insert(entry_data).execute()
-        current_app.logger.info(f"Successfully saved journal entry for user {user_id} with score {entry_data['analysis_score']} and analysis {json.dumps(entry_data['analysis'])}.")
-        return jsonify({"success": True, "data": res.data[0]}), 201
+        journal_entry = res.data[0]
+        current_app.logger.info(f"Successfully saved journal entry for user {user_id} with journal_id {journal_entry['journal_id']}.")
+
+        # Save score and analysis in the score table
+        if 'score' in data and 'analysis' in data:
+            score_data = {
+                "journal_id": journal_entry['journal_id'],
+                "score": data['score'],
+                "analysis": data['analysis']
+            }
+            try:
+                score_res = client.table("score").insert(score_data).execute()
+                current_app.logger.info(f"Successfully saved score {data['score']} and analysis {json.dumps(data['analysis'])} for journal_id {journal_entry['journal_id']}.")
+            except Exception as e:
+                current_app.logger.error(f"Error saving score: {e}", exc_info=True)
+                # Rollback the journal entry if score save fails (optional)
+                client.table("journalEntry").delete().eq("journal_id", journal_entry['journal_id']).execute()
+                return jsonify({"error": f"Failed to save score: {str(e)}"}), 500
+
+        return jsonify({"success": True, "data": journal_entry, "score": data.get('score')}), 201
     except Exception as e:
         current_app.logger.error(f"Error saving entry: {e}", exc_info=True)
         return jsonify({"error": f"Failed to save journal entry: {str(e)}"}), 500
+
+@journal_bp.route('/api/score', methods=['GET'])
+def get_score():
+    client, user_id = get_auth_client()
+    if not client or not user_id:
+        return jsonify({"error": "Authentication failed"}), 401
+
+    journal_id = request.args.get('journalId')
+    if not journal_id:
+        return jsonify({"error": "Missing journalId parameter"}), 400
+
+    try:
+        res = client.table("score").select("*").eq("journal_id", journal_id).execute()
+        if res.data:
+            return jsonify(res.data[0]), 200
+        return jsonify({"error": "Score not found"}), 404
+    except Exception as e:
+        current_app.logger.error(f"Error fetching score: {e}", exc_info=True)
+        return jsonify({"error": "An unexpected server error occurred"}), 500
