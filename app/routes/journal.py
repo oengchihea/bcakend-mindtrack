@@ -77,12 +77,12 @@ def save_journal_entry():
             "prompt_text": data.get('prompt_text'),
             "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
             "questionnaire_data": data.get('questionnaire_data'),
-            "analysis_score": data.get('score'),  # Store the analysis score if provided
-            "analysis": data.get('analysis'),    # Store analysis data as jsonb
+            "analysis_score": data.get('score'),  # Ensure score is stored
+            "analysis": data.get('analysis'),    # Ensure analysis is stored as jsonb
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
-        # Validate score if provided
+        # Validate and convert score if provided
         if entry_data["analysis_score"] is not None:
             try:
                 score = float(entry_data["analysis_score"])
@@ -92,8 +92,16 @@ def save_journal_entry():
             except (ValueError, TypeError):
                 return jsonify({"error": "Invalid score format"}), 400
 
+        # Ensure analysis is a valid JSON object if provided
+        if entry_data["analysis"] is not None:
+            if not isinstance(entry_data["analysis"], dict):
+                try:
+                    entry_data["analysis"] = json.loads(entry_data["analysis"])
+                except json.JSONDecodeError:
+                    return jsonify({"error": "Invalid analysis format, must be JSON"}), 400
+
         res = client.table("journalEntry").insert(entry_data).execute()
-        current_app.logger.info(f"Successfully saved journal entry for user {user_id} with score {entry_data['analysis_score']}.")
+        current_app.logger.info(f"Successfully saved journal entry for user {user_id} with score {entry_data['analysis_score']} and analysis {json.dumps(entry_data['analysis'])}.")
         return jsonify({"success": True, "data": res.data[0]}), 201
     except Exception as e:
         current_app.logger.error(f"Error saving entry: {e}", exc_info=True)
