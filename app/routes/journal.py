@@ -103,7 +103,7 @@ def save_journal_entry():
                 current_app.logger.error(f"Verification failed: Journal entry with journal_id {journal_entry['journal_id']} not found after insert.")
                 raise Exception("Verification failed")
 
-            # Save score and analysis only if provided and from June 21, 2025 onwards
+            # Save score and analysis only if provided and from June 21, 2025, 00:00 UTC onwards
             score = data.get('score')
             analysis = data.get('analysis')
             if score is not None and analysis is not None:
