@@ -86,6 +86,7 @@ def save_journal_entry():
         current_app.logger.info(f"Successfully saved journal entry for user {user_id} with journal_id {journal_entry['journal_id']}.")
 
         # Save score and analysis to the score table
+        score_saved = False
         if 'score' in data and 'analysis' in data:
             score_data = {
                 "journal_id": journal_entry['journal_id'],
@@ -95,15 +96,15 @@ def save_journal_entry():
             try:
                 score_res = client.table("score").insert(score_data).execute()
                 current_app.logger.info(f"Successfully saved score {data['score']} and analysis {json.dumps(data['analysis'])} for journal_id {journal_entry['journal_id']}.")
+                score_saved = True
             except Exception as e:
-                current_app.logger.error(f"Error saving score: {e}", exc_info=True)
-                # Rollback the journal entry if score save fails
-                client.table("journalEntry").delete().eq("journal_id", journal_entry['journal_id']).execute()
-                return jsonify({"error": f"Failed to save score: {str(e)}"}), 500
+                current_app.logger.error(f"Failed to save score to score table: {e}", exc_info=True)
+                # Log the error but proceed without rolling back to allow journal entry to save
+                current_app.logger.warning(f"Continuing without score save due to error: {e}")
 
-        # Return the full entry including score and analysis if saved
-        journal_entry['score'] = data.get('score')
-        journal_entry['analysis'] = data.get('analysis')
+        # Update journal_entry with score and analysis from request, regardless of score table success
+        journal_entry['score'] = data.get('score', None)
+        journal_entry['analysis'] = data.get('analysis', None)
 
         return jsonify({"success": True, "data": journal_entry}), 201
     except Exception as e:
