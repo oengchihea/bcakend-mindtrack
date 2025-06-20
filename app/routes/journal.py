@@ -97,7 +97,7 @@ def save_journal_entry():
                 if score_res.data:
                     current_app.logger.info(f"Successfully saved score {data['score']} and analysis {json.dumps(data['analysis'])} for journal_id {journal_entry['journal_id']}.")
                 else:
-                    current_app.logger.warning(f"Score insert returned no data for journal_id {journal_entry['journal_id']}.")
+                    current_app.logger.error(f"Score insert failed or returned no data for journal_id {journal_entry['journal_id']}. Response: {score_res}")
             except Exception as e:
                 current_app.logger.error(f"Failed to save score to score table: {e}", exc_info=True)
                 current_app.logger.warning(f"Continuing without score save due to error: {e}")
