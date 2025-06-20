@@ -86,23 +86,23 @@ def save_journal_entry():
         current_app.logger.info(f"Successfully saved journal entry for user {user_id} with journal_id {journal_entry['journal_id']}.")
 
         # Save score and analysis to the score table
-        score_saved = False
         if 'score' in data and 'analysis' in data:
             score_data = {
                 "journal_id": journal_entry['journal_id'],
-                "score": int(data['score']),  # Convert to int for INT2 column
-                "analysis": json.dumps(data['analysis'])  # Convert analysis to JSON string
+                "score": int(float(data['score'])),  # Ensure float to int conversion
+                "analysis": json.dumps(data['analysis'])
             }
             try:
                 score_res = client.table("score").insert(score_data).execute()
-                current_app.logger.info(f"Successfully saved score {data['score']} and analysis {json.dumps(data['analysis'])} for journal_id {journal_entry['journal_id']}.")
-                score_saved = True
+                if score_res.data:
+                    current_app.logger.info(f"Successfully saved score {data['score']} and analysis {json.dumps(data['analysis'])} for journal_id {journal_entry['journal_id']}.")
+                else:
+                    current_app.logger.warning(f"Score insert returned no data for journal_id {journal_entry['journal_id']}.")
             except Exception as e:
                 current_app.logger.error(f"Failed to save score to score table: {e}", exc_info=True)
-                # Log the error but proceed without rolling back to allow journal entry to save
                 current_app.logger.warning(f"Continuing without score save due to error: {e}")
 
-        # Update journal_entry with score and analysis from request, regardless of score table success
+        # Update journal_entry with score and analysis from request
         journal_entry['score'] = data.get('score', None)
         journal_entry['analysis'] = data.get('analysis', None)
 
