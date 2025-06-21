@@ -115,9 +115,16 @@ def save_journal_entry():
         current_app.logger.info(f"Using score: {score} for journal entry")
 
         # Validate and prepare analysis
-        if analysis is not None and not isinstance(analysis, dict):
-            current_app.logger.warning(f"Invalid analysis type: {type(analysis)}, setting to None")
-            analysis = None
+        if analysis is not None:
+            if isinstance(analysis, str):
+                try:
+                    analysis = json.loads(analysis)  # Parse string to dict if needed
+                except json.JSONDecodeError:
+                    current_app.logger.warning(f"Invalid JSON in analysis: {analysis}, setting to None")
+                    analysis = None
+            if not isinstance(analysis, dict):
+                current_app.logger.warning(f"Invalid analysis type: {type(analysis)}, setting to None")
+                analysis = None
         
         # Ensure analysis includes the score
         if analysis is None:
@@ -133,7 +140,7 @@ def save_journal_entry():
             current_app.logger.info(f"Updating existing entry with journal_id: {journal_id}")
             update_data = {
                 "score": score,
-                "analysis": json.dumps(analysis)
+                "analysis": json.dumps(analysis) if analysis else None
             }
             
             # Add other fields if provided
@@ -165,11 +172,11 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": score,
-                "analysis": json.dumps(analysis)
+                "score": score,  # Ensure score is included in the entry data
+                "analysis": json.dumps(analysis) if analysis else None
             }
 
-            current_app.logger.info(f"Creating new journal entry with score: {score}")
+            current_app.logger.info(f"Creating new journal entry with data: {entry_data}")
             
             # Insert new journal entry
             res = client.table("journalEntry").insert(entry_data).execute()
@@ -183,16 +190,15 @@ def save_journal_entry():
         verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
         if verify_res.data and len(verify_res.data) > 0:
             verified_entry = verify_res.data[0]
-            if verified_entry['score'] != score:
-                current_app.logger.warning(f"Score mismatch after save. Expected: {score}, Got: {verified_entry['score']}")
+            if verified_entry.get('score') != score:
+                current_app.logger.warning(f"Score mismatch after save. Expected: {score}, Got: {verified_entry.get('score')}")
                 # Attempt one more update
                 fix_res = client.table("journalEntry").update({"score": score, "analysis": json.dumps(analysis)}).eq("journal_id", journal_entry['journal_id']).execute()
                 if fix_res.data:
                     journal_entry = fix_res.data[0]
                     current_app.logger.info(f"Fixed score for journal_id {journal_entry['journal_id']}")
             else:
-                current_app.logger.info(f"Score verification successful: {verified_entry['score']}")
-                journal_entry = verified_entry
+                current_app.logger.info(f"Score verification successful: {verified_entry.get('score')}")
 
         return jsonify({"success": True, "data": journal_entry}), 201 if not data.get('journal_id') else 200
 
