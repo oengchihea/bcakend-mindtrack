@@ -89,6 +89,7 @@ def analyze_journal_content(content, questionnaire_data, user_id):
 
 @analyze_bp.route('/api/analyze-journal', methods=['POST'])
 def analyze_and_save_journal():
+    current_app.logger.info(f"Route /api/analyze-journal hit with method POST at {datetime.now(timezone.utc).isoformat()}")
     client, user_id = get_auth_client(current_app._get_current_object())
     if not client or not user_id:
         current_app.logger.error(f"Authentication failed for user request at {datetime.now(timezone.utc).isoformat()}")
