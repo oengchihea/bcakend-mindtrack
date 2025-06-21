@@ -11,7 +11,7 @@ analyze_bp = Blueprint('analyze_bp', __name__)
 def get_auth_client(app):
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
-        current_app.logger.warning("Auth header missing or malformed.")
+        current_app.logger.warning("Auth header missing or malformed at %s", datetime.now(timezone.utc).isoformat())
         return None, None
 
     token = auth_header.split(" ")[1]
@@ -19,18 +19,18 @@ def get_auth_client(app):
     for attempt in range(max_retries):
         try:
             if not app.supabase:
-                current_app.logger.error("Supabase client not initialized in app context.")
+                current_app.logger.error("Supabase client not initialized in app context at %s", datetime.now(timezone.utc).isoformat())
                 return None, None
             client = app.supabase
             client.postgrest.auth(token)
             user_response = client.auth.get_user(jwt=token)
             if user_response.user:
                 return client, user_response.user.id
-            current_app.logger.warning(f"Auth attempt {attempt + 1} failed: No user response.")
+            current_app.logger.warning(f"Auth attempt {attempt + 1} failed: No user response at {datetime.now(timezone.utc).isoformat()}")
         except Exception as e:
-            current_app.logger.error(f"Auth client creation failed (attempt {attempt + 1}/{max_retries}): {e}", exc_info=True)
+            current_app.logger.error(f"Auth client creation failed (attempt {attempt + 1}/{max_retries}): {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
             if attempt < max_retries - 1:
-                current_app.logger.info("Reinitializing Supabase client due to auth failure.")
+                current_app.logger.info("Reinitializing Supabase client due to auth failure at %s", datetime.now(timezone.utc).isoformat())
                 app.supabase = create_client(app.config['SUPABASE_URL'], app.config['SUPABASE_KEY'])
             else:
                 return None, None
@@ -39,7 +39,7 @@ def get_auth_client(app):
 def analyze_journal_content(content, questionnaire_data, user_id):
     # Simulated analysis (replace with actual AI API call, e.g., Google Generative AI)
     try:
-        current_app.logger.info(f"Analyzing journal content: {content[:50]}... for user {user_id}")
+        current_app.logger.info(f"Analyzing journal content: {content[:50]}... for user {user_id} at {datetime.now(timezone.utc).isoformat()}")
         
         # Determine sentiment based on content and questionnaire
         sentiment = "neutral"
@@ -75,7 +75,7 @@ def analyze_journal_content(content, questionnaire_data, user_id):
         elif sentiment == "negative":
             emoji = "😔"
 
-        current_app.logger.info(f"Analysis result: sentiment={sentiment}, score={score}, themes={themes}, insights={insights}, emoji={emoji}")
+        current_app.logger.info(f"Analysis result: sentiment={sentiment}, score={score}, themes={themes}, insights={insights}, emoji={emoji} at {datetime.now(timezone.utc).isoformat()}")
         return {
             "sentiment": sentiment,
             "score": score,
@@ -84,17 +84,19 @@ def analyze_journal_content(content, questionnaire_data, user_id):
             "emoji": emoji
         }
     except Exception as e:
-        current_app.logger.error(f"Error in analyze_journal_content: {e}", exc_info=True)
+        current_app.logger.error(f"Error in analyze_journal_content: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
         return {"error": f"Failed to analyze journal content: {str(e)}"}
 
 @analyze_bp.route('/api/analyze-journal', methods=['POST'])
 def analyze_and_save_journal():
     client, user_id = get_auth_client(current_app._get_current_object())
     if not client or not user_id:
+        current_app.logger.error(f"Authentication failed for user request at {datetime.now(timezone.utc).isoformat()}")
         return jsonify({"error": "Authentication failed"}), 401
 
     data = request.get_json()
     if not data or 'content' not in data or 'questionnaireData' not in data or 'userId' not in data:
+        current_app.logger.warning(f"Missing required fields in request at {datetime.now(timezone.utc).isoformat()}")
         return jsonify({"error": "Missing required fields: content, questionnaireData, and userId"}), 400
 
     content = data['content']
@@ -102,12 +104,14 @@ def analyze_and_save_journal():
     try:
         # Validate userId from request matches authenticated userId
         if data['userId'] != user_id:
+            current_app.logger.warning(f"Access denied: Mismatched user ID {data['userId']} vs {user_id} at {datetime.now(timezone.utc).isoformat()}")
             return jsonify({"error": "Access denied: Mismatched user ID"}), 403
 
         # Analyze the journal content
-        current_app.logger.info(f"Received analyze-journal request for user {user_id} with content: {content[:50]}...")
+        current_app.logger.info(f"Received analyze-journal request for user {user_id} with content: {content[:50]}... at {datetime.now(timezone.utc).isoformat()}")
         analysis_result = analyze_journal_content(content, questionnaire_data, user_id)
         if "error" in analysis_result:
+            current_app.logger.error(f"Analysis failed with error: {analysis_result['error']} at {datetime.now(timezone.utc).isoformat()}")
             return jsonify(analysis_result), 500
 
         # Prepare data for saving to Supabase
@@ -124,13 +128,14 @@ def analyze_and_save_journal():
             "analysis": json.dumps(analysis_result)  # Ensure analysis is saved as JSON
         }
 
-        current_app.logger.info(f"Saving journal entry to Supabase: {journal_entry}")
-        res = client.table("journalEntry").insert(journal_entry).execute()  # Correct table name
+        current_app.logger.info(f"Attempting to save journal entry to Supabase: {journal_entry} at {datetime.now(timezone.utc).isoformat()}")
+        res = client.table("journalEntry").insert(journal_entry).execute()
         if not res.data or len(res.data) == 0:
+            current_app.logger.error(f"Failed to insert journal entry into Supabase at {datetime.now(timezone.utc).isoformat()}")
             raise Exception("Failed to insert journal entry into Supabase")
 
         journal_entry = res.data[0]
-        current_app.logger.info(f"Successfully saved journal entry {journal_entry['journal_id']} with score {journal_entry['score']}")
+        current_app.logger.info(f"Successfully saved journal entry {journal_entry['journal_id']} with score {journal_entry['score']} at {datetime.now(timezone.utc).isoformat()}")
 
         return jsonify({
             "success": True,
@@ -139,5 +144,5 @@ def analyze_and_save_journal():
         }), 201
 
     except Exception as e:
-        current_app.logger.error(f"Error analyzing or saving journal entry: {e}", exc_info=True)
+        current_app.logger.error(f"Error analyzing or saving journal entry: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
         return jsonify({"error": f"Failed to analyze or save journal entry: {str(e)}"}), 500
