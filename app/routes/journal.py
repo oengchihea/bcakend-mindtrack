@@ -86,20 +86,18 @@ def save_journal_entry():
         if journal_id:
             # Update existing entry
             current_app.logger.info(f"Updating existing entry with journal_id: {journal_id}")
-            update_data = {}
-            if 'content' in data:
-                update_data['entry_text'] = data['content']
-            if 'mood' in data:
-                update_data['mood'] = data['mood']
-            if 'prompt_text' in data:
-                update_data['prompt_text'] = data['prompt_text']
-            if 'questionnaire_data' in data:
-                update_data['questionnaire_data'] = data['questionnaire_data']
-                update_data['entry_type'] = data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal')
+            update_data = {
+                "entry_text": data.get('content'),
+                "mood": data.get('mood'),
+                "prompt_text": data.get('prompt_text'),
+                "questionnaire_data": data.get('questionnaire_data'),
+                "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
+            }
+            # Explicitly set score and analysis if provided
             if 'score' in data and data['score'] is not None:
-                update_data['score'] = data['score']
+                update_data['score'] = int(data['score'])  # Ensure score is an integer
             if 'analysis' in data and data['analysis'] is not None:
-                update_data['analysis'] = json.dumps(data['analysis'])
+                update_data['analysis'] = json.dumps(data['analysis'])  # Ensure analysis is stored as JSON string
 
             res = client.table("journalEntry").update(update_data).eq("journal_id", journal_id).execute()
             if not res.data or len(res.data) == 0:
@@ -118,8 +116,9 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": data.get('score'),  # Save score if provided
-                "analysis": json.dumps(data.get('analysis', {})) if data.get('analysis') else None  # Save analysis if provided
+                # Explicitly set score and analysis
+                "score": int(data.get('score', 0)) if data.get('score') is not None else None,
+                "analysis": json.dumps(data.get('analysis', {})) if data.get('analysis') else None
             }
 
             current_app.logger.info(f"Creating new journal entry with data: {entry_data}")
@@ -133,6 +132,70 @@ def save_journal_entry():
 
         return jsonify({"success": True, "data": journal_entry}), 201 if not journal_id else 200
 
+    except (ValueError, TypeError) as e:
+        current_app.logger.error(f"Invalid score or analysis data: {e}", exc_info=True)
+        return jsonify({"error": f"Invalid data format: {str(e)}"}), 400
     except Exception as e:
         current_app.logger.error(f"Error saving entry: {e}", exc_info=True)
         return jsonify({"error": f"Failed to save journal entry: {str(e)}"}), 500
+
+# Optional: Add /api/journalScore endpoint if a separate journal_scores table is needed
+@journal_bp.route('/api/journalScore', methods=['POST'])
+def save_journal_score():
+    client, user_id = get_auth_client(current_app._get_current_object())
+    if not client or not user_id:
+        return jsonify({"error": "Authentication failed"}), 401
+
+    data = request.get_json()
+    if not data or 'journalId' not in data or 'score' not in data or 'userId' not in data or data['userId'] != user_id:
+        return jsonify({"error": "Missing required fields: journalId, score, and userId, or mismatched userId"}), 400
+
+    try:
+        journal_id = data.get('journalId')
+        score = data.get('score')
+        analysis = data.get('analysis')
+
+        try:
+            score = int(float(str(score)))
+            if score < 0 or score > 10:
+                raise ValueError("Score must be between 0 and 10")
+        except (ValueError, TypeError):
+            current_app.logger.error(f"Invalid score value: {score}, rejecting request")
+            return jsonify({"error": "Invalid score value, must be a number between 0 and 10"}), 400
+
+        current_app.logger.info(f"Saving score: {score} for journal_id: {journal_id}")
+
+        if analysis is not None:
+            if isinstance(analysis, str):
+                try:
+                    analysis = json.loads(analysis)
+                except json.JSONDecodeError:
+                    current_app.logger.warning(f"Invalid JSON in analysis: {analysis}, setting to None")
+                    analysis = None
+            if not isinstance(analysis, dict):
+                current_app.logger.warning(f"Invalid analysis type: {type(analysis)}, setting to None")
+                analysis = None
+
+        score_data = {
+            "journal_id": journal_id,
+            "user_id": user_id,
+            "score": score,
+            "analysis": json.dumps(analysis) if analysis else None,
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+
+        res = client.table("journal_scores").insert(score_data).execute()
+        if not res.data or len(res.data) == 0:
+            raise Exception(f"Failed to save score for journal_id: {journal_id}")
+
+        score_entry = res.data[0]
+        current_app.logger.info(f"Successfully saved score for journal_id: {journal_id} with score {score}")
+
+        return jsonify({"success": True, "data": score_entry}), 201
+
+    except ValueError as ve:
+        current_app.logger.error(f"Validation error saving score: {ve}", exc_info=True)
+        return jsonify({"error": f"Validation error: {str(ve)}"}), 400
+    except Exception as e:
+        current_app.logger.error(f"Error saving score: {e}", exc_info=True)
+        return jsonify({"error": f"Failed to save journal score: {str(e)}"}), 500
