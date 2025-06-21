@@ -96,7 +96,7 @@ def save_journal_entry():
                 if score < 0 or score > 10:
                     raise ValueError("Score from analysis must be between 0 and 10")
             else:
-                raise ValueError("Score is required for journal entry")
+                score = 6.0  # Default to 6.0 as per your requirement if no score is provided
 
             if analysis is not None and not isinstance(analysis, dict):
                 raise ValueError("Analysis must be a dictionary")
@@ -110,7 +110,7 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": score,  # Explicitly set score, required field
+                "score": score,  # Explicitly set score with default fallback to 6.0
                 "analysis": json.dumps(analysis) if analysis else None  # Serialize analysis if provided
             }
 
