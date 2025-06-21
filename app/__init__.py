@@ -58,7 +58,6 @@ def create_app():
         def health_check():
             supabase_status = "OK" if app.supabase else "Error: Supabase client not initialized"
             blueprints = list(app.blueprints.keys())
-            # Log all registered routes
             routes = sorted([f"{rule.method} {rule.rule}" for rule in app.url_map.iter_rules()])
             logging.info("Registered routes: %s at %s", routes, datetime.now(timezone.utc).isoformat())
             return jsonify({
@@ -70,14 +69,18 @@ def create_app():
 
     except ImportError as e:
         logging.error(f"CRITICAL ERROR: Failed to import or register blueprint: {e} at %s", datetime.now(timezone.utc).isoformat(), exc_info=True)
+        return None
     except Exception as e:
         logging.error(f"Unexpected error during app setup: {e} at %s", datetime.now(timezone.utc).isoformat(), exc_info=True)
+        return None
 
     logging.info("--- Flask app creation finished at %s ---", datetime.now(timezone.utc).isoformat())
     return app
 
 # WSGI application for Vercel
 app = create_app()
+if app is None:
+    raise RuntimeError("Failed to create Flask application")
 
 # Ensure the app object is the WSGI entry point
 if __name__ == "__main__":

@@ -2,12 +2,13 @@
   "version": 2,
   "builds": [
     {
-      "src": "app/**/*.py",
+      "src": "app/__init__.py",
       "use": "@vercel/python",
       "config": {
         "wsgi": "app.__init__.application",
         "pythonVersion": "3.11",
-        "maxLambdaSize": "50mb"
+        "maxLambdaSize": "50mb",
+        "includeFiles": ["app/**/*.py"]
       }
     }
   ],
