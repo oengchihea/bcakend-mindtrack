@@ -9,10 +9,14 @@
       }
     }
   ],
-  "rewrites": [
+  "routes": [
     {
-      "source": "/(.*)",
-      "destination": "/app/__init__.py"
+      "src": "/api/(.*)",
+      "dest": "/app/__init__.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/app/__init__.py"
     }
   ]
 }

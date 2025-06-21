@@ -116,7 +116,7 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": data.get('score', None),  # Include score from request, default to None if not provided
+                "score": data.get('score')  # Explicitly include score from request
             }
 
             current_app.logger.info(f"Creating new journal entry with data: {entry_data}")

@@ -40,24 +40,32 @@ def create_app():
         # Register Journal Blueprint with Supabase client
         from .routes.journal import journal_bp
         app.register_blueprint(journal_bp, url_prefix='/api')
-        logging.info("Successfully registered 'journal_bp' blueprint.")
+        logging.info("Successfully registered 'journal_bp' blueprint with /api prefix.")
 
         # Register Mood Blueprint
         from .routes.mood import mood_bp
         app.register_blueprint(mood_bp, url_prefix='/api')
-        logging.info("Successfully registered 'mood_bp' blueprint.")
+        logging.info("Successfully registered 'mood_bp' blueprint with /api prefix.")
 
+        # Register Auth Blueprint
         from .routes.auth import auth_bp
         app.register_blueprint(auth_bp, url_prefix='/api')
-        logging.info("Successfully registered 'auth_bp' blueprint.")
+        logging.info("Successfully registered 'auth_bp' blueprint with /api prefix.")
 
+        # Register User Blueprint
         from .routes.user import user_bp
         app.register_blueprint(user_bp, url_prefix='/api')
-        logging.info("Successfully registered 'user_bp' blueprint.")
+        logging.info("Successfully registered 'user_bp' blueprint with /api prefix.")
 
+        # Register Posts Blueprint
         from .routes.posts import posts_bp
         app.register_blueprint(posts_bp, url_prefix='/api')
-        logging.info("Successfully registered 'posts_bp' blueprint.")
+        logging.info("Successfully registered 'posts_bp' blueprint with /api prefix.")
+
+        # Debug route to confirm /api/journalScore is accessible
+        @app.route('/api/journalScore', methods=['GET'])
+        def debug_journal_score():
+            return jsonify({"message": "Journal score endpoint is accessible"}), 200
 
     except ImportError as e:
         logging.error(f"CRITICAL ERROR: Failed to import or register blueprint: {e}", exc_info=True)
@@ -87,6 +95,12 @@ def health_check():
         blueprints_registered.append("journal_bp")
     if 'mood' in app.blueprints:
         blueprints_registered.append("mood_bp")
+    if 'auth' in app.blueprints:
+        blueprints_registered.append("auth_bp")
+    if 'user' in app.blueprints:
+        blueprints_registered.append("user_bp")
+    if 'posts' in app.blueprints:
+        blueprints_registered.append("posts_bp")
 
     return jsonify({
         "status": "healthy",
