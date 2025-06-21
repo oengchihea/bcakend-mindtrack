@@ -2,10 +2,10 @@
   "version": 2,
   "builds": [
     {
-      "src": "app/__init__.py",
+      "src": "app/**.py",
       "use": "@vercel/python",
       "config": {
-        "wsgi": "app.application"
+        "wsgi": "app.__init__.application"
       }
     }
   ],

@@ -1,4 +1,5 @@
 from flask import Blueprint, request, jsonify, current_app
+from datetime import datetime, timezone
 import random
 
 journal_prompt_bp = Blueprint('journal_prompt_bp', __name__)
@@ -8,7 +9,7 @@ def generate_journal_prompts():
     current_app.logger.info("Received request for journal prompts at %s", datetime.now(timezone.utc).isoformat())
     data = request.get_json()
     if not data:
-        current_app.logger.warning("No JSON data received for journal prompt generation")
+        current_app.logger.warning("No JSON data received for journal prompt generation at %s", datetime.now(timezone.utc).isoformat())
         return jsonify({"error": "No data provided"}), 400
 
     count = data.get('count', 3)
@@ -24,15 +25,19 @@ def generate_journal_prompts():
         "How are you feeling physically and emotionally at this moment?",
     ]
 
+    # Filter prompts based on mood or topic
+    filtered_prompts = prompts
     if mood:
-        prompts = [p for p in prompts if mood.lower() in p.lower()]
+        filtered_prompts = [p for p in filtered_prompts if mood.lower() in p.lower()]
     if topic:
-        prompts = [p for p in prompts if topic.lower() in p.lower()]
+        filtered_prompts = [p for p in filtered_prompts if topic.lower() in p.lower()]
 
-    if not prompts:
-        current_app.logger.warning("No prompts available after filtering by mood=%s and topic=%s", mood, topic)
-        return jsonify({"error": "No prompts available for the given filters"}), 400
-
-    selected_prompts = random.sample(prompts, min(count, len(prompts)))
-    current_app.logger.info("Generated %d prompts: %s", len(selected_prompts), selected_prompts)
+    # If no prompts match filters, return a subset of default prompts
+    if not filtered_prompts:
+        current_app.logger.info("No prompts matched filters (mood=%s, topic=%s), returning %d default prompts at %s", 
+                                mood, topic, min(count, len(prompts)), datetime.now(timezone.utc).isoformat())
+        filtered_prompts = random.sample(prompts, min(count, len(prompts)))
+    
+    selected_prompts = random.sample(filtered_prompts, min(count, len(filtered_prompts)))
+    current_app.logger.info("Generated %d prompts: %s at %s", len(selected_prompts), selected_prompts, datetime.now(timezone.utc).isoformat())
     return jsonify({"prompts": selected_prompts}), 200
