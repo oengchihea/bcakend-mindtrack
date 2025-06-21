@@ -10,9 +10,21 @@
         "maxLambdaSize": "50mb",
         "includeFiles": ["app/**/*.py"]
       }
+    },
+    {
+      "src": "route.js",
+      "use": "@vercel/next"
     }
   ],
   "routes": [
+    {
+      "src": "/api/journal-prompt/generate",
+      "dest": "/route.js"
+    },
+    {
+      "src": "/api/analyze-journal",
+      "dest": "/route.js"
+    },
     {
       "src": "/api/(.*)",
       "dest": "/app/__init__.py",
@@ -26,6 +38,7 @@
   "env": {
     "SUPABASE_URL": "@supabase_url",
     "SUPABASE_KEY": "@supabase_key",
+    "GEMINI_API_KEY_V2": "@gemini_api_key_v2",
     "PYTHONPATH": "./app:./app/routes"
   }
 }

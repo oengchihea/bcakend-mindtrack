@@ -48,10 +48,10 @@ def create_app():
         app.register_blueprint(analyze_bp, url_prefix='/api')
         logging.info("Successfully registered 'analyze_bp' blueprint with /api prefix at %s", datetime.now(timezone.utc).isoformat())
 
-        # Register Journal Prompt Blueprint
-        from .routes.journal_prompt import journal_prompt_bp
-        app.register_blueprint(journal_prompt_bp, url_prefix='/api')
-        logging.info("Successfully registered 'journal_prompt_bp' blueprint with /api prefix at %s", datetime.now(timezone.utc).isoformat())
+        # Register Journal Prompt Blueprint (optional, as Next.js handles /journal-prompt/generate)
+        # from .routes.journal_prompt import journal_prompt_bp
+        # app.register_blueprint(journal_prompt_bp, url_prefix='/api')
+        # logging.info("Successfully registered 'journal_prompt_bp' blueprint with /api prefix at %s", datetime.now(timezone.utc).isoformat())
 
         # Debug route to confirm endpoints
         @app.route('/api/health', methods=['GET'])
