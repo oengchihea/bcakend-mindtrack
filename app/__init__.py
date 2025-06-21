@@ -38,30 +38,10 @@ def create_app():
     logging.info("CORS configured for /api/* at %s", datetime.now(timezone.utc).isoformat())
 
     try:
-        # Register Journal Blueprint with Supabase client
+        # Register Journal Blueprint
         from .routes.journal import journal_bp
         app.register_blueprint(journal_bp, url_prefix='/api')
         logging.info("Successfully registered 'journal_bp' blueprint with /api prefix at %s", datetime.now(timezone.utc).isoformat())
-
-        # Register Mood Blueprint
-        from .routes.mood import mood_bp
-        app.register_blueprint(mood_bp, url_prefix='/api')
-        logging.info("Successfully registered 'mood_bp' blueprint with /api prefix at %s", datetime.now(timezone.utc).isoformat())
-
-        # Register Auth Blueprint
-        from .routes.auth import auth_bp
-        app.register_blueprint(auth_bp, url_prefix='/api')
-        logging.info("Successfully registered 'auth_bp' blueprint with /api prefix at %s", datetime.now(timezone.utc).isoformat())
-
-        # Register User Blueprint
-        from .routes.user import user_bp
-        app.register_blueprint(user_bp, url_prefix='/api')
-        logging.info("Successfully registered 'user_bp' blueprint with /api prefix at %s", datetime.now(timezone.utc).isoformat())
-
-        # Register Posts Blueprint
-        from .routes.posts import posts_bp
-        app.register_blueprint(posts_bp, url_prefix='/api')
-        logging.info("Successfully registered 'posts_bp' blueprint with /api prefix at %s", datetime.now(timezone.utc).isoformat())
 
         # Register Analyze Journal Blueprint
         from .routes.analyze_journal import analyze_bp
@@ -73,15 +53,21 @@ def create_app():
         app.register_blueprint(journal_prompt_bp, url_prefix='/api')
         logging.info("Successfully registered 'journal_prompt_bp' blueprint with /api prefix at %s", datetime.now(timezone.utc).isoformat())
 
-        # Debug route to confirm /api/journalScore is accessible
-        @app.route('/api/journalScore', methods=['GET'])
-        def debug_journal_score():
-            return jsonify({"message": "Journal score endpoint is accessible at %s" % datetime.now(timezone.utc).isoformat()}), 200
+        # Debug route to confirm endpoints
+        @app.route('/api/health', methods=['GET'])
+        def health_check():
+            supabase_status = "OK" if app.supabase else "Error: Supabase client not initialized"
+            blueprints = list(app.blueprints.keys())
+            return jsonify({
+                "status": "healthy",
+                "supabase_client": supabase_status,
+                "registered_blueprints": blueprints
+            }), 200
 
     except ImportError as e:
         logging.error(f"CRITICAL ERROR: Failed to import or register blueprint: {e} at %s", datetime.now(timezone.utc).isoformat(), exc_info=True)
     except Exception as e:
-        logging.error(f"Unexpected error during blueprint registration: {e} at %s", datetime.now(timezone.utc).isoformat(), exc_info=True)
+        logging.error(f"Unexpected error during app setup: {e} at %s", datetime.now(timezone.utc).isoformat(), exc_info=True)
 
     logging.info("--- Flask app creation finished at %s ---", datetime.now(timezone.utc).isoformat())
     return app
