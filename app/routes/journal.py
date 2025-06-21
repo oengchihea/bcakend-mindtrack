@@ -80,33 +80,32 @@ def save_journal_entry():
         return jsonify({"error": "Missing required fields: content and mood"}), 400
 
     try:
-        # Extract score from the request
+        # Extract and validate score from the request
         score = data.get('score')
         analysis = data.get('analysis')
 
-        # Validate and convert score to integer for int2 column
+        # Ensure score is a valid integer for the int2 column
         if score is not None:
             try:
                 score = int(float(str(score)))  # Convert to int for int2 column
                 if score < 0 or score > 10:
-                    raise ValueError("Score out of range (0-10)")
+                    raise ValueError("Score must be between 0 and 10")
             except (ValueError, TypeError):
-                current_app.logger.error(f"Invalid score value: {score}, setting to None")
-                score = None
+                current_app.logger.error(f"Invalid score value: {score}, rejecting request")
+                return jsonify({"error": "Invalid score value, must be a number between 0 and 10"}), 400
         else:
             current_app.logger.warning("No score provided in request, checking analysis")
             if analysis and isinstance(analysis, dict) and 'score' in analysis:
                 try:
                     score = int(float(str(analysis['score'])))
                     if score < 0 or score > 10:
-                        raise ValueError("Score out of range (0-10)")
+                        raise ValueError("Score must be between 0 and 10")
                 except (ValueError, TypeError):
-                    score = None
-                    current_app.logger.error(f"Invalid score in analysis: {analysis.get('score')}, setting to None")
-
-        if score is None:
-            current_app.logger.error("No valid score provided, rejecting request")
-            return jsonify({"error": "No valid score provided"}), 400
+                    current_app.logger.error(f"Invalid score in analysis: {analysis.get('score')}, rejecting request")
+                    return jsonify({"error": "Invalid score in analysis, must be a number between 0 and 10"}), 400
+            else:
+                current_app.logger.error("No valid score provided in request or analysis, rejecting request")
+                return jsonify({"error": "No valid score provided"}), 400
 
         current_app.logger.info(f"Using score: {score} for journal entry")
 
@@ -122,11 +121,11 @@ def save_journal_entry():
                 current_app.logger.warning(f"Invalid analysis type: {type(analysis)}, setting to None")
                 analysis = None
 
-        # Ensure analysis includes the score if it exists
-        if analysis is not None:
-            analysis['score'] = score
-        else:
+        # Ensure analysis includes the score
+        if analysis is None:
             analysis = {'score': score}
+        else:
+            analysis['score'] = score
 
         # Check if this is an update (has journal_id) or new entry
         journal_id = data.get('journal_id')
@@ -167,7 +166,7 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": score,  # Store score directly in the score column
+                "score": score,  # Store score directly in the score column (int2)
                 "analysis": json.dumps(analysis)  # Store full analysis in jsonb column
             }
 
