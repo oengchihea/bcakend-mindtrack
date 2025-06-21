@@ -26,7 +26,7 @@ def get_auth_client(app):
             user_response = client.auth.get_user(jwt=token)
             if user_response.user:
                 return client, user_response.user.id
-            current_app.logger.warning(f"Auth attempt {attempt + 1} failed: No user response at {datetime.now(timezone.utc).isoformat()}")
+            current_app.logger.warning(f"Auth attempt {attempt + 1} failed: No user response at %s", datetime.now(timezone.utc).isoformat())
         except Exception as e:
             current_app.logger.error(f"Auth client creation failed (attempt {attempt + 1}/{max_retries}): {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
             if attempt < max_retries - 1:
@@ -37,7 +37,6 @@ def get_auth_client(app):
     return None, None
 
 def analyze_journal_content(content, questionnaire_data, user_id):
-    # Simulated analysis (replace with actual AI API call, e.g., Google Generative AI)
     try:
         current_app.logger.info(f"Analyzing journal content: {content[:50]}... for user {user_id} at {datetime.now(timezone.utc).isoformat()}")
         
@@ -50,7 +49,7 @@ def analyze_journal_content(content, questionnaire_data, user_id):
             sentiment = "negative"
 
         # Calculate score (0-10)
-        score = 5  # Default
+        score = 5
         if sentiment == "positive":
             score = 8
         elif sentiment == "negative":
@@ -75,6 +74,9 @@ def analyze_journal_content(content, questionnaire_data, user_id):
         elif sentiment == "negative":
             emoji = "😔"
 
+        # Ensure score is an integer
+        score = int(score)
+
         current_app.logger.info(f"Analysis result: sentiment={sentiment}, score={score}, themes={themes}, insights={insights}, emoji={emoji} at {datetime.now(timezone.utc).isoformat()}")
         return {
             "sentiment": sentiment,
@@ -85,7 +87,14 @@ def analyze_journal_content(content, questionnaire_data, user_id):
         }
     except Exception as e:
         current_app.logger.error(f"Error in analyze_journal_content: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
-        return {"error": f"Failed to analyze journal content: {str(e)}"}
+        return {
+            "error": f"Failed to analyze journal content: {str(e)}",
+            "sentiment": "neutral",
+            "score": 5,
+            "themes": [],
+            "insights": "Analysis failed, default values applied.",
+            "emoji": "😐"
+        }
 
 @analyze_bp.route('/api/analyze-journal', methods=['POST'])
 def analyze_and_save_journal():
@@ -115,6 +124,15 @@ def analyze_and_save_journal():
             current_app.logger.error(f"Analysis failed with error: {analysis_result['error']} at {datetime.now(timezone.utc).isoformat()}")
             return jsonify(analysis_result), 500
 
+        # Ensure score is an integer
+        score = int(analysis_result.get('score', 5))
+        analysis_result['score'] = score
+
+        # Validate analysis result
+        if not isinstance(analysis_result, dict) or 'sentiment' not in analysis_result or 'score' not in analysis_result:
+            current_app.logger.error(f"Invalid analysis result format: {analysis_result} at {datetime.now(timezone.utc).isoformat()}")
+            return jsonify({"error": "Invalid analysis result format"}), 500
+
         # Prepare data for saving to Supabase
         journal_entry = {
             "journal_id": str(uuid.uuid4()),
@@ -125,8 +143,8 @@ def analyze_and_save_journal():
             "entry_type": questionnaire_data.get("journal_interaction_type", "Journal"),
             "questionnaire_data": json.dumps(questionnaire_data) if questionnaire_data else None,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "score": analysis_result["score"],  # Ensure score is saved
-            "analysis": json.dumps(analysis_result)  # Ensure analysis is saved as JSON
+            "score": score,
+            "analysis": json.dumps(analysis_result)
         }
 
         current_app.logger.info(f"Attempting to save journal entry to Supabase: {journal_entry} at {datetime.now(timezone.utc).isoformat()}")
