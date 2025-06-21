@@ -37,32 +37,38 @@ def get_auth_client(app):
     return None, None
 
 def analyze_journal_content(content, questionnaire_data, user_id):
-    # Placeholder for AI analysis (simulating Gemini API behavior)
-    # In a real scenario, replace this with an actual AI API call (e.g., Google Generative AI)
+    # Simulated analysis (replace with actual AI API call, e.g., Google Generative AI)
     try:
-        # Simulated analysis based on content and questionnaire data
+        current_app.logger.info(f"Analyzing journal content: {content[:50]}... for user {user_id}")
+        
+        # Determine sentiment based on content and questionnaire
         sentiment = "neutral"
-        if "happy" in content.lower() or (questionnaire_data and "mood_word" in questionnaire_data and "happy" in questionnaire_data["mood_word"].lower()):
+        if any(word in content.lower() for word in ["happy", "joy", "excited"]) or \
+           (questionnaire_data and "mood_word" in questionnaire_data and any(word in questionnaire_data["mood_word"].lower() for word in ["happy", "joy"])):
             sentiment = "positive"
-        elif "sad" in content.lower():
+        elif any(word in content.lower() for word in ["sad", "depressed", "angry"]):
             sentiment = "negative"
 
-        score = 5  # Default score
+        # Calculate score (0-10)
+        score = 5  # Default
         if sentiment == "positive":
             score = 8
         elif sentiment == "negative":
             score = 3
 
+        # Extract themes
         themes = []
-        if "stress" in content.lower():
+        if "stress" in content.lower() or (questionnaire_data and "stress_level" in questionnaire_data and int(questionnaire_data["stress_level"]) > 5):
             themes.append("stress")
-        if "grateful" in content.lower():
+        if "grateful" in content.lower() or (questionnaire_data and "mood_word" in questionnaire_data and "grateful" in questionnaire_data["mood_word"].lower()):
             themes.append("gratitude")
 
+        # Provide insights
         insights = "No specific insights detected."
         if themes:
             insights = f"Key themes include: {', '.join(themes)}."
 
+        # Select emoji
         emoji = "😐"
         if sentiment == "positive":
             emoji = "😊"
@@ -77,7 +83,7 @@ def analyze_journal_content(content, questionnaire_data, user_id):
             "emoji": emoji
         }
     except Exception as e:
-        current_app.logger.error(f"Error analyzing journal content: {e}", exc_info=True)
+        current_app.logger.error(f"Error in analyze_journal_content: {e}", exc_info=True)
         return {"error": f"Failed to analyze journal content: {str(e)}"}
 
 @analyze_bp.route('/api/analyze-journal', methods=['POST'])
@@ -106,19 +112,19 @@ def analyze_and_save_journal():
             "mood": questionnaire_data.get("mood_word", "neutral"),
             "prompt_text": questionnaire_data.get("prompts_and_answers", [{}])[0].get("prompt") if questionnaire_data.get("prompts_and_answers") else None,
             "entry_type": questionnaire_data.get("journal_interaction_type", "Journal"),
-            "questionnaire_data": questionnaire_data,
+            "questionnaire_data": json.dumps(questionnaire_data) if questionnaire_data else None,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "score": analysis_result["score"],
-            "analysis": json.dumps(analysis_result)
+            "score": analysis_result["score"],  # Ensure score is saved
+            "analysis": json.dumps(analysis_result)  # Ensure analysis is saved as JSON
         }
 
-        # Save to Supabase
+        current_app.logger.info(f"Saving journal entry to Supabase: {journal_entry}")
         res = client.table("journalEntry").insert(journal_entry).execute()
         if not res.data or len(res.data) == 0:
             raise Exception("Failed to insert journal entry into Supabase")
 
         journal_entry = res.data[0]
-        current_app.logger.info(f"Successfully analyzed and saved journal entry {journal_entry['journal_id']}")
+        current_app.logger.info(f"Successfully saved journal entry {journal_entry['journal_id']} with score {journal_entry['score']}")
 
         return jsonify({
             "success": True,
