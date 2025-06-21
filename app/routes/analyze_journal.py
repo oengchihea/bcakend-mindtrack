@@ -75,6 +75,7 @@ def analyze_journal_content(content, questionnaire_data, user_id):
         elif sentiment == "negative":
             emoji = "😔"
 
+        current_app.logger.info(f"Analysis result: sentiment={sentiment}, score={score}, themes={themes}, insights={insights}, emoji={emoji}")
         return {
             "sentiment": sentiment,
             "score": score,
@@ -93,13 +94,18 @@ def analyze_and_save_journal():
         return jsonify({"error": "Authentication failed"}), 401
 
     data = request.get_json()
-    if not data or 'content' not in data or 'questionnaireData' not in data:
-        return jsonify({"error": "Missing required fields: content and questionnaireData"}), 400
+    if not data or 'content' not in data or 'questionnaireData' not in data or 'userId' not in data:
+        return jsonify({"error": "Missing required fields: content, questionnaireData, and userId"}), 400
 
     content = data['content']
     questionnaire_data = data['questionnaireData']
     try:
+        # Validate userId from request matches authenticated userId
+        if data['userId'] != user_id:
+            return jsonify({"error": "Access denied: Mismatched user ID"}), 403
+
         # Analyze the journal content
+        current_app.logger.info(f"Received analyze-journal request for user {user_id} with content: {content[:50]}...")
         analysis_result = analyze_journal_content(content, questionnaire_data, user_id)
         if "error" in analysis_result:
             return jsonify(analysis_result), 500
@@ -119,7 +125,7 @@ def analyze_and_save_journal():
         }
 
         current_app.logger.info(f"Saving journal entry to Supabase: {journal_entry}")
-        res = client.table("journalEntry").insert(journal_entry).execute()
+        res = client.table("journalEntry").insert(journal_entry).execute()  # Correct table name
         if not res.data or len(res.data) == 0:
             raise Exception("Failed to insert journal entry into Supabase")
 

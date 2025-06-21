@@ -62,6 +62,11 @@ def create_app():
         app.register_blueprint(posts_bp, url_prefix='/api')
         logging.info("Successfully registered 'posts_bp' blueprint with /api prefix.")
 
+        # Register Analyze Journal Blueprint
+        from .routes.analyze_journal import analyze_bp
+        app.register_blueprint(analyze_bp, url_prefix='/api')
+        logging.info("Successfully registered 'analyze_bp' blueprint with /api prefix.")
+
         # Debug route to confirm /api/journalScore is accessible
         @app.route('/api/journalScore', methods=['GET'])
         def debug_journal_score():
@@ -101,6 +106,8 @@ def health_check():
         blueprints_registered.append("user_bp")
     if 'posts' in app.blueprints:
         blueprints_registered.append("posts_bp")
+    if 'analyze' in app.blueprints:
+        blueprints_registered.append("analyze_bp")
 
     return jsonify({
         "status": "healthy",
