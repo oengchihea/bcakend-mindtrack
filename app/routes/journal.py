@@ -96,6 +96,8 @@ def save_journal_entry():
             if 'questionnaire_data' in data:
                 update_data['questionnaire_data'] = data['questionnaire_data']
                 update_data['entry_type'] = data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal')
+            if 'score' in data:  # Ensure score is updated if provided
+                update_data['score'] = data['score']
 
             res = client.table("journalEntry").update(update_data).eq("journal_id", journal_id).execute()
             if not res.data or len(res.data) == 0:
@@ -114,6 +116,7 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
+                "score": data.get('score', None),  # Include score from request, default to None if not provided
             }
 
             current_app.logger.info(f"Creating new journal entry with data: {entry_data}")
