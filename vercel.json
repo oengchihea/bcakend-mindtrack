@@ -2,17 +2,19 @@
   "version": 2,
   "builds": [
     {
-      "src": "app/**.py",
+      "src": "app/**/*.py",
       "use": "@vercel/python",
       "config": {
-        "wsgi": "app.__init__.application"
+        "wsgi": "app.__init__.application",
+        "pythonVersion": "3.11"
       }
     }
   ],
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "/app/__init__.py"
+      "dest": "/app/__init__.py",
+      "methods": ["GET", "POST", "PUT", "DELETE"]
     },
     {
       "src": "/(.*)",
@@ -21,6 +23,7 @@
   ],
   "env": {
     "SUPABASE_URL": "@supabase_url",
-    "SUPABASE_KEY": "@supabase_key"
+    "SUPABASE_KEY": "@supabase_key",
+    "PYTHONPATH": "./app"
   }
 }

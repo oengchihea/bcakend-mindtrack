@@ -58,10 +58,14 @@ def create_app():
         def health_check():
             supabase_status = "OK" if app.supabase else "Error: Supabase client not initialized"
             blueprints = list(app.blueprints.keys())
+            # Log all registered routes
+            routes = sorted([f"{rule.method} {rule.rule}" for rule in app.url_map.iter_rules()])
+            logging.info("Registered routes: %s at %s", routes, datetime.now(timezone.utc).isoformat())
             return jsonify({
                 "status": "healthy",
                 "supabase_client": supabase_status,
-                "registered_blueprints": blueprints
+                "registered_blueprints": blueprints,
+                "routes": routes
             }), 200
 
     except ImportError as e:
