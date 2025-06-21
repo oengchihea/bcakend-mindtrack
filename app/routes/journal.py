@@ -80,27 +80,82 @@ def save_journal_entry():
         return jsonify({"error": "Missing required fields: content and mood"}), 400
 
     try:
-        # Use transaction to ensure atomicity for new entries
-        with client.transaction() as tx:
-            # Prepare journal entry data with score and analysis for new submissions
-            score = data.get('score')
-            analysis = data.get('analysis')
-            if score is not None:
-                if not isinstance(score, (int, float)):
-                    raise ValueError("Score must be a number")
-                score = float(score)  # Ensure score is a float
-                if score < 0 or score > 10:
-                    raise ValueError("Score must be between 0 and 10")
-            elif score is None and 'analysis' in data and isinstance(data['analysis'], dict) and 'score' in data['analysis']:
-                score = float(data['analysis']['score'])  # Fallback to score from analysis if provided
-                if score < 0 or score > 10:
-                    raise ValueError("Score from analysis must be between 0 and 10")
+        # Handle score validation and defaults
+        score = data.get('score')
+        analysis = data.get('analysis')
+        
+        # Ensure we have a valid score
+        if score is not None:
+            if not isinstance(score, (int, float)):
+                current_app.logger.warning(f"Invalid score type: {type(score)}, converting to float")
+                try:
+                    score = float(score)
+                except (ValueError, TypeError):
+                    current_app.logger.warning(f"Failed to convert score to float, using default 6.0")
+                    score = 6.0
             else:
-                score = 6.0  # Default to 6.0 as per your requirement if no score is provided
+                score = float(score)  # Ensure it's a float
+                
+            # Validate score range
+            if score < 0 or score > 10:
+                current_app.logger.warning(f"Score {score} out of range, using default 6.0")
+                score = 6.0
+        else:
+            # If no score provided, try to get it from analysis
+            if analysis and isinstance(analysis, dict) and 'score' in analysis:
+                try:
+                    score = float(analysis['score'])
+                    if score < 0 or score > 10:
+                        score = 6.0
+                except (ValueError, TypeError):
+                    score = 6.0
+            else:
+                score = 6.0  # Default score
+        
+        current_app.logger.info(f"Using score: {score} for journal entry")
 
-            if analysis is not None and not isinstance(analysis, dict):
-                raise ValueError("Analysis must be a dictionary")
+        # Validate and prepare analysis
+        if analysis is not None and not isinstance(analysis, dict):
+            current_app.logger.warning(f"Invalid analysis type: {type(analysis)}, setting to None")
+            analysis = None
+        
+        # Ensure analysis includes the score
+        if analysis is None:
+            analysis = {'score': score}
+        else:
+            analysis['score'] = score
 
+        # Check if this is an update (has journal_id) or new entry
+        journal_id = data.get('journal_id')
+        
+        if journal_id:
+            # Update existing entry
+            current_app.logger.info(f"Updating existing entry with journal_id: {journal_id}")
+            update_data = {
+                "score": score,
+                "analysis": json.dumps(analysis)
+            }
+            
+            # Add other fields if provided
+            if 'content' in data:
+                update_data['entry_text'] = data['content']
+            if 'mood' in data:
+                update_data['mood'] = data['mood']
+            if 'prompt_text' in data:
+                update_data['prompt_text'] = data['prompt_text']
+            if 'questionnaire_data' in data:
+                update_data['questionnaire_data'] = data['questionnaire_data']
+                update_data['entry_type'] = data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal')
+            
+            res = client.table("journalEntry").update(update_data).eq("journal_id", journal_id).execute()
+            if not res.data or len(res.data) == 0:
+                raise Exception(f"Failed to update journal entry with journal_id: {journal_id}")
+            
+            journal_entry = res.data[0]
+            current_app.logger.info(f"Successfully updated journal entry {journal_id} with score {score}")
+            
+        else:
+            # Create new entry
             entry_data = {
                 "journal_id": str(uuid.uuid4()),
                 "user_id": user_id,
@@ -110,77 +165,40 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": score,  # Explicitly set score with default fallback to 6.0
-                "analysis": json.dumps(analysis) if analysis else None  # Serialize analysis if provided
+                "score": score,
+                "analysis": json.dumps(analysis)
             }
 
+            current_app.logger.info(f"Creating new journal entry with score: {score}")
+            
             # Insert new journal entry
             res = client.table("journalEntry").insert(entry_data).execute()
             if not res.data or len(res.data) == 0:
                 raise Exception("Failed to insert journal entry into Supabase")
+            
             journal_entry = res.data[0]
-            current_app.logger.info(f"Initial save attempt for new journal entry for user {user_id} with journal_id {journal_entry['journal_id']} and score {journal_entry['score']}.")
+            current_app.logger.info(f"Successfully created journal entry {journal_entry['journal_id']} with score {journal_entry['score']}")
 
-            # Verify and enforce score and analysis for new entry with immediate retry
-            max_retries = 3
-            for attempt in range(max_retries):
-                verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
-                if not verify_res.data:
-                    current_app.logger.error(f"Verification failed for new journal entry with journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
-                    raise Exception("Verification failed for new entry")
-                journal_entry = verify_res.data[0]
-                score_matches = journal_entry['score'] == score
-                analysis_matches = (journal_entry['analysis'] == (json.dumps(analysis) if analysis else None))
-                if score_matches and analysis_matches:
-                    current_app.logger.info(f"Successfully verified new journal entry with score {journal_entry['score']} and analysis for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
-                    break
-                else:
-                    current_app.logger.warning(f"Mismatch for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}. Expected score: {score}, Got: {journal_entry['score']}. Expected analysis: {json.dumps(analysis) if analysis else None}, Got: {journal_entry['analysis']}.")
-                    update_data = {
-                        "score": score,
-                        "analysis": json.dumps(analysis) if analysis else None
-                    }
-                    update_res = client.table("journalEntry").update(update_data).eq("journal_id", journal_entry['journal_id']).execute()
-                    if not update_res.data:
-                        current_app.logger.error(f"Update failed for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
-                        if attempt < max_retries - 1:
-                            time.sleep(1)  # Wait before retry
-                        else:
-                            raise Exception("Failed to update score and analysis after retries")
-                    journal_entry = update_res.data[0]
-                    # Immediate re-verification after update
-                    verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
-                    if verify_res.data and verify_res.data[0]['score'] == score and verify_res.data[0]['analysis'] == (json.dumps(analysis) if analysis else None):
-                        current_app.logger.info(f"Confirmed score {score} and analysis saved for journal_id {journal_entry['journal_id']} after update on attempt {attempt + 1}.")
-                        break
+        # Verify the score was saved correctly
+        verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
+        if verify_res.data and len(verify_res.data) > 0:
+            verified_entry = verify_res.data[0]
+            if verified_entry['score'] != score:
+                current_app.logger.warning(f"Score mismatch after save. Expected: {score}, Got: {verified_entry['score']}")
+                # Attempt one more update
+                fix_res = client.table("journalEntry").update({"score": score, "analysis": json.dumps(analysis)}).eq("journal_id", journal_entry['journal_id']).execute()
+                if fix_res.data:
+                    journal_entry = fix_res.data[0]
+                    current_app.logger.info(f"Fixed score for journal_id {journal_entry['journal_id']}")
             else:
-                raise Exception("Max retries reached without successful score and analysis update")
+                current_app.logger.info(f"Score verification successful: {verified_entry['score']}")
+                journal_entry = verified_entry
 
-            return jsonify({"success": True, "data": journal_entry}), 201
+        return jsonify({"success": True, "data": journal_entry}), 201 if not data.get('journal_id') else 200
+
     except ValueError as ve:
         current_app.logger.error(f"Validation error saving entry: {ve}", exc_info=True)
         return jsonify({"error": f"Validation error: {str(ve)}"}), 400
     except Exception as e:
         current_app.logger.error(f"Error saving entry: {e}", exc_info=True)
         return jsonify({"error": f"Failed to save journal entry: {str(e)}"}), 500
-
-@journal_bp.route('/api/score', methods=['GET'])
-def get_score():
-    client, user_id = get_auth_client(current_app._get_current_object())
-    if not client or not user_id:
-        return jsonify({"error": "Authentication failed"}), 401
-
-    journal_id = request.args.get('journalId')
-    if not journal_id:
-        return jsonify({"error": "Missing journalId parameter"}), 400
-
-    try:
-        res = client.table("journalEntry").select("score", "analysis").eq("journal_id", journal_id).execute()
-        if res.data:
-            score_data = res.data[0]
-            score_data['analysis'] = json.loads(score_data['analysis']) if score_data['analysis'] else {}
-            return jsonify(score_data), 200
-        return jsonify({"score": None, "analysis": None}), 200  # Return null values
-    except Exception as e:
-        current_app.logger.error(f"Error fetching score: {e}", exc_info=True)
-        return jsonify({"error": "An unexpected server error occurred"}), 500
