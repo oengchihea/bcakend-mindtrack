@@ -80,11 +80,11 @@ def save_journal_entry():
         return jsonify({"error": "Missing required fields: content and mood"}), 400
 
     try:
-        # Extract and validate score from the request
+        # Extract and validate score
         score = data.get('score')
         analysis = data.get('analysis')
 
-        # Ensure score is a valid integer for the int2 column
+        # Ensure a valid score is provided
         if score is not None:
             try:
                 score = int(float(str(score)))  # Convert to int for int2 column
@@ -93,39 +93,37 @@ def save_journal_entry():
             except (ValueError, TypeError):
                 current_app.logger.error(f"Invalid score value: {score}, rejecting request")
                 return jsonify({"error": "Invalid score value, must be a number between 0 and 10"}), 400
+        elif analysis and isinstance(analysis, (dict, str)):
+            try:
+                if isinstance(analysis, str):
+                    analysis = json.loads(analysis)
+                score = int(float(str(analysis['score'])))
+                if score < 0 or score > 10:
+                    raise ValueError("Score must be between 0 and 10")
+            except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+                current_app.logger.error(f"Invalid score in analysis: {analysis.get('score')}, rejecting request")
+                return jsonify({"error": "Invalid score in analysis, must be a number between 0 and 10"}), 400
         else:
-            current_app.logger.warning("No score provided in request, checking analysis")
-            if analysis and isinstance(analysis, dict) and 'score' in analysis:
-                try:
-                    score = int(float(str(analysis['score'])))
-                    if score < 0 or score > 10:
-                        raise ValueError("Score must be between 0 and 10")
-                except (ValueError, TypeError):
-                    current_app.logger.error(f"Invalid score in analysis: {analysis.get('score')}, rejecting request")
-                    return jsonify({"error": "Invalid score in analysis, must be a number between 0 and 10"}), 400
-            else:
-                current_app.logger.error("No valid score provided in request or analysis, rejecting request")
-                return jsonify({"error": "No valid score provided"}), 400
+            current_app.logger.error("No valid score provided in request or analysis, rejecting request")
+            return jsonify({"error": "A valid score is required"}), 400
 
         current_app.logger.info(f"Using score: {score} for journal entry")
 
         # Validate and prepare analysis
-        if analysis is not None:
-            if isinstance(analysis, str):
-                try:
-                    analysis = json.loads(analysis)
-                except json.JSONDecodeError:
-                    current_app.logger.warning(f"Invalid JSON in analysis: {analysis}, setting to None")
-                    analysis = None
-            if not isinstance(analysis, dict):
-                current_app.logger.warning(f"Invalid analysis type: {type(analysis)}, setting to None")
-                analysis = None
-
-        # Ensure analysis includes the score
         if analysis is None:
             analysis = {'score': score}
-        else:
-            analysis['score'] = score
+        elif isinstance(analysis, str):
+            try:
+                analysis = json.loads(analysis)
+            except json.JSONDecodeError:
+                current_app.logger.warning(f"Invalid JSON in analysis: {analysis}, using score only")
+                analysis = {'score': score}
+        elif not isinstance(analysis, dict):
+            current_app.logger.warning(f"Invalid analysis type: {type(analysis)}, using score only")
+            analysis = {'score': score}
+
+        # Ensure analysis includes the score
+        analysis['score'] = score
 
         # Check if this is an update (has journal_id) or new entry
         journal_id = data.get('journal_id')
@@ -166,8 +164,8 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": score,  # Ensure score is saved to the score column
-                "analysis": json.dumps(analysis)  # Ensure analysis includes score
+                "score": score,  # Save score to int2 column
+                "analysis": json.dumps(analysis)  # Save analysis with score
             }
 
             current_app.logger.info(f"Creating new journal entry with data: {entry_data}")
@@ -181,7 +179,7 @@ def save_journal_entry():
             current_app.logger.info(f"Successfully created journal entry {journal_entry['journal_id']} with score {journal_entry['score']}")
 
         # Verify the score was saved correctly
-        verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
+        verify_res = client.table("journalEntry").select("journal_id, score").eq("journal_id", journal_entry['journal_id']).execute()
         if verify_res.data and len(verify_res.data) > 0:
             verified_entry = verify_res.data[0]
             if verified_entry.get('score') != score:
@@ -190,7 +188,7 @@ def save_journal_entry():
             else:
                 current_app.logger.info(f"Score verification successful: {verified_entry.get('score')}")
 
-        return jsonify({"success": True, "data": journal_entry}), 201 if not data.get('journal_id') else 200
+        return jsonify({"success": True, "data": journal_entry}), 201 if not journal_id else 200
 
     except ValueError as ve:
         current_app.logger.error(f"Validation error saving entry: {ve}", exc_info=True)
