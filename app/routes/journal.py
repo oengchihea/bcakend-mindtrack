@@ -103,7 +103,7 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": score,  # Save score as float
+                "score": score if score is not None else None,  # Ensure score is saved if provided
                 "analysis": json.dumps(analysis) if analysis else None  # Serialize analysis if provided
             }
 
@@ -120,7 +120,7 @@ def save_journal_entry():
                     current_app.logger.error(f"Verification failed for new journal entry with journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
                     raise Exception("Verification failed for new entry")
                 journal_entry = verify_res.data[0]
-                score_matches = journal_entry['score'] == score
+                score_matches = journal_entry['score'] == score if score is not None else journal_entry['score'] is None
                 analysis_matches = (journal_entry['analysis'] == (json.dumps(analysis) if analysis else None))
                 if score_matches and analysis_matches:
                     current_app.logger.info(f"Successfully verified new journal entry with score {journal_entry['score']} and analysis for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}.")
@@ -128,7 +128,7 @@ def save_journal_entry():
                 else:
                     current_app.logger.warning(f"Mismatch for journal_id {journal_entry['journal_id']} on attempt {attempt + 1}. Expected score: {score}, Got: {journal_entry['score']}. Expected analysis: {json.dumps(analysis) if analysis else None}, Got: {journal_entry['analysis']}.")
                     update_data = {
-                        "score": score,
+                        "score": score if score is not None else None,
                         "analysis": json.dumps(analysis) if analysis else None
                     }
                     update_res = client.table("journalEntry").update(update_data).eq("journal_id", journal_entry['journal_id']).execute()
@@ -141,8 +141,8 @@ def save_journal_entry():
                     journal_entry = update_res.data[0]
                     # Immediate re-verification after update
                     verify_res = client.table("journalEntry").select("*").eq("journal_id", journal_entry['journal_id']).execute()
-                    if verify_res.data and verify_res.data[0]['score'] == score and verify_res.data[0]['analysis'] == (json.dumps(analysis) if analysis else None):
-                        current_app.logger.info(f"Confirmed score {score} and analysis saved for journal_id {journal_entry['journal_id']} after update on attempt {attempt + 1}.")
+                    if verify_res.data and verify_res.data[0]['score'] == (score if score is not None else None) and verify_res.data[0]['analysis'] == (json.dumps(analysis) if analysis else None):
+                        current_app.logger.info(f"Confirmed score {score if score is not None else 'None'} and analysis saved for journal_id {journal_entry['journal_id']} after update on attempt {attempt + 1}.")
                         break
             else:
                 raise Exception("Max retries reached without successful score and analysis update")
