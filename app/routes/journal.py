@@ -93,12 +93,17 @@ def save_journal_entry():
                 "questionnaire_data": data.get('questionnaire_data'),
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
             }
-            # Explicitly set score and analysis if provided
+            # Explicitly set score and analysis, with type checking
             if 'score' in data and data['score'] is not None:
-                update_data['score'] = int(data['score'])  # Ensure score is an integer
+                update_data['score'] = int(data['score']) if isinstance(data['score'], (int, float, str)) else None
             if 'analysis' in data and data['analysis'] is not None:
-                update_data['analysis'] = json.dumps(data['analysis'])  # Ensure analysis is stored as JSON string
+                try:
+                    update_data['analysis'] = json.dumps(data['analysis']) if isinstance(data['analysis'], (dict, str)) else None
+                except (TypeError, ValueError) as e:
+                    current_app.logger.error(f"Failed to serialize analysis: {e}")
+                    update_data['analysis'] = None
 
+            current_app.logger.info(f"Update data sent to Supabase: {update_data}")
             res = client.table("journalEntry").update(update_data).eq("journal_id", journal_id).execute()
             if not res.data or len(res.data) == 0:
                 raise Exception(f"Failed to update journal entry with journal_id: {journal_id}")
@@ -116,13 +121,12 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                # Explicitly set score and analysis
-                "score": int(data.get('score', 0)) if data.get('score') is not None else None,
-                "analysis": json.dumps(data.get('analysis', {})) if data.get('analysis') else None
+                # Explicitly set score and analysis with type validation
+                "score": int(data.get('score', 0)) if data.get('score') is not None and isinstance(data.get('score'), (int, float, str)) else None,
+                "analysis": json.dumps(data.get('analysis', {})) if data.get('analysis') is not None and isinstance(data.get('analysis'), (dict, str)) else None
             }
 
-            current_app.logger.info(f"Creating new journal entry with data: {entry_data}")
-
+            current_app.logger.info(f"Insert data sent to Supabase: {entry_data}")
             res = client.table("journalEntry").insert(entry_data).execute()
             if not res.data or len(res.data) == 0:
                 raise Exception("Failed to insert journal entry into Supabase")
@@ -139,7 +143,7 @@ def save_journal_entry():
         current_app.logger.error(f"Error saving entry: {e}", exc_info=True)
         return jsonify({"error": f"Failed to save journal entry: {str(e)}"}), 500
 
-# Optional: Add /api/journalScore endpoint if a separate journal_scores table is needed
+# Optional: /api/journalScore endpoint (enable if journal_scores table is needed)
 @journal_bp.route('/api/journalScore', methods=['POST'])
 def save_journal_score():
     client, user_id = get_auth_client(current_app._get_current_object())
@@ -184,6 +188,7 @@ def save_journal_score():
             "created_at": datetime.now(timezone.utc).isoformat()
         }
 
+        current_app.logger.info(f"Score data sent to Supabase: {score_data}")
         res = client.table("journal_scores").insert(score_data).execute()
         if not res.data or len(res.data) == 0:
             raise Exception(f"Failed to save score for journal_id: {journal_id}")
