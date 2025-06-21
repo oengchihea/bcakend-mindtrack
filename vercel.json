@@ -5,40 +5,18 @@
       "src": "app/__init__.py",
       "use": "@vercel/python",
       "config": {
-        "wsgi": "app.__init__.application",
-        "pythonVersion": "3.11",
-        "maxLambdaSize": "50mb",
-        "includeFiles": ["app/**/*.py"]
+        "wsgi": "app.app"
       }
-    },
-    {
-      "src": "route.js",
-      "use": "@vercel/next"
     }
   ],
   "routes": [
     {
-      "src": "/api/journal-prompt/generate",
-      "dest": "/route.js"
-    },
-    {
-      "src": "/api/analyze-journal",
-      "dest": "/route.js"
-    },
-    {
       "src": "/api/(.*)",
-      "dest": "/app/__init__.py",
-      "methods": ["GET", "POST", "PUT", "DELETE"]
+      "dest": "/app/__init__.py"
     },
     {
       "src": "/(.*)",
       "dest": "/app/__init__.py"
     }
-  ],
-  "env": {
-    "SUPABASE_URL": "@supabase_url",
-    "SUPABASE_KEY": "@supabase_key",
-    "GEMINI_API_KEY_V2": "@gemini_api_key_v2",
-    "PYTHONPATH": "./app:./app/routes"
-  }
+  ]
 }
