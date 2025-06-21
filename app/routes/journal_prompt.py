@@ -4,7 +4,7 @@ import random
 
 journal_prompt_bp = Blueprint('journal_prompt_bp', __name__)
 
-@journal_prompt_bp.route('/api/journal-prompt/generate', methods=['POST'])
+@journal_prompt_bp.route('/journal-prompt/generate', methods=['POST'])
 def generate_journal_prompts():
     current_app.logger.info("Received request for /api/journal-prompt/generate at %s", datetime.now(timezone.utc).isoformat())
     data = request.get_json()

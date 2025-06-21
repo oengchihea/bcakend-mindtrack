@@ -6,7 +6,8 @@
       "use": "@vercel/python",
       "config": {
         "wsgi": "app.__init__.application",
-        "pythonVersion": "3.11"
+        "pythonVersion": "3.11",
+        "maxLambdaSize": "50mb"
       }
     }
   ],
@@ -24,6 +25,6 @@
   "env": {
     "SUPABASE_URL": "@supabase_url",
     "SUPABASE_KEY": "@supabase_key",
-    "PYTHONPATH": "./app"
+    "PYTHONPATH": "./app:./app/routes"
   }
 }
