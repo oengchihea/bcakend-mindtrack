@@ -166,8 +166,8 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": score,  # Store score directly in the score column (int2)
-                "analysis": json.dumps(analysis)  # Store full analysis in jsonb column
+                "score": score,  # Ensure score is saved to the score column
+                "analysis": json.dumps(analysis)  # Ensure analysis includes score
             }
 
             current_app.logger.info(f"Creating new journal entry with data: {entry_data}")
