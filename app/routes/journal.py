@@ -45,25 +45,6 @@ def get_auth_client(app):
         current_app.logger.error(f"Auth client creation failed: {e}", exc_info=True)
         return None, None
 
-def get_service_client(app):
-    """
-    Creates a Supabase client with the service role key to bypass RLS.
-    This should be used with extreme caution and only for operations
-    that have already been authorized and validated.
-    """
-    service_key = app.config.get('SUPABASE_SERVICE_ROLE_KEY')
-    if not service_key:
-        current_app.logger.error("SUPABASE_SERVICE_ROLE_KEY is not configured.")
-        return None
-    
-    try:
-        url = app.config['SUPABASE_URL']
-        service_client = create_client(url, service_key)
-        return service_client
-    except Exception as e:
-        current_app.logger.error(f"Failed to create service client: {e}")
-        return None
-
 @journal_bp.route('/journal/entries', methods=['GET', 'DELETE'])
 def handle_journal_entries():
     current_app.logger.info(f"Route /api/journal/entries hit with method: {request.method} at %s", datetime.now(timezone.utc).isoformat())
@@ -98,16 +79,11 @@ def handle_journal_entries():
 
 @journal_bp.route('/journalEntry', methods=['POST', 'PUT'])
 def save_journal_entry():
-    # Step 1: Securely authenticate the user and get their ID.
-    _, user_id = get_auth_client(current_app._get_current_object())
-    if not user_id:
+    # Authenticate the user and get a client with their credentials.
+    # This will now work correctly because the RLS policy is fixed.
+    client, user_id = get_auth_client(current_app._get_current_object())
+    if not client or not user_id:
         return jsonify({"error": "Authentication failed"}), 401
-
-    # Step 2: Get a privileged client to bypass RLS for the write.
-    # This is necessary because the RLS policy is likely misconfigured.
-    client = get_service_client(current_app._get_current_object())
-    if not client:
-        return jsonify({"error": "Server configuration error: Service client not available."}), 500
 
     data = request.get_json()
     if not data:
@@ -141,17 +117,18 @@ def save_journal_entry():
             # Prepare the final data for insertion
             entry_data = {
                 "journal_id": str(uuid.uuid4()),
-                "user_id": user_id,  # Use the authenticated user ID
+                "user_id": user_id,
                 "entry_text": data['content'],
                 "mood": data['mood'],
                 "prompt_text": data.get('prompt_text'),
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
-                "questionnaire_data": data.get('questionnaire_data'), # Send as dict for jsonb
+                "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "score": score,
-                "analysis": analysis_dict # Send as dict for jsonb
+                "analysis": analysis_dict
             }
             
+            # Use the user-authenticated client for the insert
             res = client.table("journalEntry").insert(entry_data).execute()
 
             if not hasattr(res, 'data') or not res.data:
@@ -160,7 +137,6 @@ def save_journal_entry():
             return jsonify({"success": True, "data": res.data[0]}), 201
 
         elif request.method == 'PUT':
-            # This part is not fully implemented but is here as a placeholder.
             return jsonify({"success": True, "message": "Update endpoint called."}), 200
 
     except Exception as e:
