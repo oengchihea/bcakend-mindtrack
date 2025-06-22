@@ -104,19 +104,21 @@ def save_journal_entry():
                     current_app.logger.error(f"Invalid score value: {data['score']} for journal_id {journal_id} at %s", datetime.now(timezone.utc).isoformat())
                     return jsonify({"error": "Invalid score value, must be a number between 0 and 10"}), 400
 
-            # Fallback to score from analysis if score is missing
+            # Fallback to score from analysis if score is missing or null
             if update_data['score'] is None and 'analysis' in data and data['analysis']:
                 try:
                     analysis_data = json.loads(data['analysis']) if isinstance(data['analysis'], str) else data['analysis']
                     update_data['score'] = int(analysis_data.get('score', 5))
                     current_app.logger.warning(f"Score missing in update, using fallback from analysis: {update_data['score']} at %s", datetime.now(timezone.utc).isoformat())
                 except (json.JSONDecodeError, TypeError, ValueError):
-                    update_data['score'] = 5  # Default score
+                    update_data['score'] = 5  # Default score as a fallback
                     current_app.logger.error(f"Failed to parse analysis for score, using default: {update_data['score']} at %s", datetime.now(timezone.utc).isoformat())
 
+            # Ensure analysis is properly serialized
             if 'analysis' in data and data['analysis'] is not None:
                 try:
                     update_data['analysis'] = json.dumps(data['analysis']) if isinstance(data['analysis'], dict) else data['analysis']
+                    current_app.logger.info(f"Serialized analysis for update: {update_data['analysis']} at %s", datetime.now(timezone.utc).isoformat())
                 except (TypeError, ValueError) as e:
                     current_app.logger.error(f"Failed to serialize analysis: {e} at %s", datetime.now(timezone.utc).isoformat())
                     update_data['analysis'] = None
@@ -124,7 +126,8 @@ def save_journal_entry():
             current_app.logger.info(f"Update data sent to Supabase: {update_data} at %s", datetime.now(timezone.utc).isoformat())
             res = client.table("journalEntry").update(update_data).eq("journal_id", journal_id).eq("user_id", user_id).execute()
             if not res.data or len(res.data) == 0:
-                raise Exception(f"No rows updated for journal_id: {journal_id}. Check if entry exists or user_id matches.")
+                current_app.logger.error(f"No rows updated for journal_id: {journal_id}. Check if entry exists or user_id matches at %s", datetime.now(timezone.utc).isoformat())
+                raise Exception(f"No rows updated for journal_id: {journal_id}")
 
             journal_entry = res.data[0]
             current_app.logger.info(f"Successfully updated journal entry {journal_id} with score {journal_entry['score']} at %s", datetime.now(timezone.utc).isoformat())
@@ -138,7 +141,7 @@ def save_journal_entry():
             if score is None and analysis is not None:
                 try:
                     analysis_data = json.loads(analysis) if isinstance(analysis, str) else analysis
-                    score = int(analysis_data.get('score', 5))  # Default to 5 if no score in analysis
+                    score = int(analysis_data.get('score', 5))
                     current_app.logger.warning(f"Score missing in request, using fallback from analysis: {score} at %s", datetime.now(timezone.utc).isoformat())
                 except (json.JSONDecodeError, TypeError, ValueError):
                     score = 5  # Default score if analysis parsing fails
@@ -173,6 +176,7 @@ def save_journal_entry():
             current_app.logger.info(f"Insert data sent to Supabase: {entry_data} at %s", datetime.now(timezone.utc).isoformat())
             res = client.table("journalEntry").insert(entry_data).execute() if not journal_id else client.table("journalEntry").update(entry_data).eq("journal_id", journal_id).eq("user_id", user_id).execute()
             if not res.data or len(res.data) == 0:
+                current_app.logger.error(f"Failed to insert/update journal entry into Supabase at %s", datetime.now(timezone.utc).isoformat())
                 raise Exception("Failed to insert/update journal entry into Supabase")
 
             journal_entry = res.data[0]
