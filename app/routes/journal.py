@@ -75,6 +75,7 @@ def save_journal_entry():
         return jsonify({"error": "Authentication failed"}), 401
 
     data = request.get_json()
+    current_app.logger.info(f"Received request data: {data} at %s", datetime.now(timezone.utc).isoformat())
     if not data or 'content' not in data or 'mood' not in data:
         return jsonify({"error": "Missing required fields: content and mood"}), 400
 
@@ -91,33 +92,33 @@ def save_journal_entry():
                 "prompt_text": data.get('prompt_text'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
-                "score": data.get('score'),  # Explicitly include score for updates
-                "analysis": data.get('analysis'),
             }
-            # Ensure score is valid if provided
-            if 'score' in data:
-                try:
-                    update_data['score'] = int(float(str(data['score']))) if data['score'] is not None else None
-                    if update_data['score'] is not None and (update_data['score'] < 0 or update_data['score'] > 10):
-                        raise ValueError("Score must be between 0 and 10")
-                except (ValueError, TypeError):
-                    current_app.logger.error(f"Invalid score value: {data['score']} for journal_id {journal_id} at %s", datetime.now(timezone.utc).isoformat())
-                    return jsonify({"error": "Invalid score value, must be a number between 0 and 10"}), 400
-
-            # Fallback to score from analysis if score is missing or null
+            # Enforce score and analysis from request
+            update_data['score'] = data.get('score')
             if update_data['score'] is None and 'analysis' in data and data['analysis']:
                 try:
                     analysis_data = json.loads(data['analysis']) if isinstance(data['analysis'], str) else data['analysis']
                     update_data['score'] = int(analysis_data.get('score', 5))
                     current_app.logger.warning(f"Score missing in update, using fallback from analysis: {update_data['score']} at %s", datetime.now(timezone.utc).isoformat())
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    update_data['score'] = 5  # Default score as a fallback
+                except (json.JSONDecodeError, TypeError, ValueError) as e:
+                    update_data['score'] = 5  # Default score
                     current_app.logger.error(f"Failed to parse analysis for score, using default: {update_data['score']} at %s", datetime.now(timezone.utc).isoformat())
 
-            # Ensure analysis is properly serialized
-            if 'analysis' in data and data['analysis'] is not None:
+            if 'score' in update_data and update_data['score'] is not None:
                 try:
-                    update_data['analysis'] = json.dumps(data['analysis']) if isinstance(data['analysis'], dict) else data['analysis']
+                    update_data['score'] = int(float(str(update_data['score'])))
+                    if update_data['score'] < 0 or update_data['score'] > 10:
+                        raise ValueError("Score must be between 0 and 10")
+                except (ValueError, TypeError) as e:
+                    current_app.logger.error(f"Invalid score value: {update_data['score']} for journal_id {journal_id} at %s", datetime.now(timezone.utc).isoformat())
+                    return jsonify({"error": "Invalid score value, must be a number between 0 and 10"}), 400
+            else:
+                update_data['score'] = 5  # Default if no valid score provided
+
+            update_data['analysis'] = data.get('analysis')
+            if update_data['analysis'] is not None:
+                try:
+                    update_data['analysis'] = json.dumps(update_data['analysis']) if isinstance(update_data['analysis'], dict) else update_data['analysis']
                     current_app.logger.info(f"Serialized analysis for update: {update_data['analysis']} at %s", datetime.now(timezone.utc).isoformat())
                 except (TypeError, ValueError) as e:
                     current_app.logger.error(f"Failed to serialize analysis: {e} at %s", datetime.now(timezone.utc).isoformat())
@@ -143,7 +144,7 @@ def save_journal_entry():
                     analysis_data = json.loads(analysis) if isinstance(analysis, str) else analysis
                     score = int(analysis_data.get('score', 5))
                     current_app.logger.warning(f"Score missing in request, using fallback from analysis: {score} at %s", datetime.now(timezone.utc).isoformat())
-                except (json.JSONDecodeError, TypeError, ValueError):
+                except (json.JSONDecodeError, TypeError, ValueError) as e:
                     score = 5  # Default score if analysis parsing fails
                     current_app.logger.error(f"Failed to parse analysis for score, using default: {score} at %s", datetime.now(timezone.utc).isoformat())
 
@@ -151,13 +152,13 @@ def save_journal_entry():
                 score = int(float(str(score)))
                 if score < 0 or score > 10:
                     raise ValueError("Score must be between 0 and 10")
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as e:
                 return jsonify({"error": "Invalid score value, must be a number between 0 and 10"}), 400
 
             try:
                 analysis = json.dumps(analysis) if isinstance(analysis, dict) else analysis
                 json.loads(analysis)
-            except (TypeError, ValueError, json.JSONDecodeError):
+            except (TypeError, ValueError, json.JSONDecodeError) as e:
                 return jsonify({"error": "Invalid analysis format, must be valid JSON"}), 400
 
             entry_data = {
