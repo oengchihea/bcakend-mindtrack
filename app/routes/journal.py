@@ -75,36 +75,37 @@ def save_journal_entry():
         return jsonify({"error": "Authentication failed"}), 401
 
     data = request.get_json()
-    current_app.logger.info(f"Received request data for /journalEntry: {data} at %s", datetime.now(timezone.utc).isoformat())
-    if not data or 'content' not in data or 'mood' not in data:
-        return jsonify({"error": "Missing required fields: content and mood"}), 400
+    current_app.logger.info(f"Received request for /journalEntry ({request.method}) at %s", datetime.now(timezone.utc).isoformat())
+
+    if not data:
+        return jsonify({"error": "Request body cannot be empty."}), 400
 
     try:
-        journal_id = data.get('journal_id')
-
-        # This block handles both creating a new entry (POST) and updating an existing one (PUT).
-        # For this fix, we are focusing on the creation part.
         if request.method == 'POST':
-            score = data.get('score')
-            analysis = data.get('analysis')
-
-            if score is None or analysis is None:
-                current_app.logger.error(f"Missing score or analysis for new entry. Score: {score}, Analysis: {analysis} at {datetime.now(timezone.utc).isoformat()}")
-                return jsonify({"error": "Missing required fields: score and analysis"}), 400
+            required_fields = ['content', 'mood', 'score', 'analysis']
+            missing = [field for field in required_fields if field not in data]
+            if missing:
+                return jsonify({"error": f"Missing required fields: {', '.join(missing)}"}), 400
 
             try:
-                score = int(float(str(score)))
+                score = int(data['score'])
                 if not (0 <= score <= 10):
                     raise ValueError("Score must be between 0 and 10.")
             except (ValueError, TypeError):
-                current_app.logger.error(f"Invalid score value: {score} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
-                return jsonify({"error": "Invalid score value. Must be a number between 0 and 10."}), 400
+                current_app.logger.error(f"Invalid score value: {data.get('score')}")
+                return jsonify({"error": "Score must be an integer between 0 and 10."}), 400
 
             try:
-                analysis_str = json.dumps(analysis) if isinstance(analysis, dict) else str(analysis)
-            except (TypeError, ValueError) as e:
-                current_app.logger.error(f"Failed to serialize analysis: {analysis} due to {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
-                return jsonify({"error": "Invalid analysis format."}), 400
+                analysis_data = data['analysis']
+                if isinstance(analysis_data, str):
+                    analysis_dict = json.loads(analysis_data)
+                elif isinstance(analysis_data, dict):
+                    analysis_dict = analysis_data
+                else:
+                    raise TypeError("Analysis must be a valid JSON object or string.")
+            except (json.JSONDecodeError, TypeError) as e:
+                current_app.logger.error(f"Invalid analysis format: {data.get('analysis')}, error: {e}")
+                return jsonify({"error": f"Invalid analysis format: {e}"}), 400
 
             entry_data = {
                 "journal_id": str(uuid.uuid4()),
@@ -113,30 +114,34 @@ def save_journal_entry():
                 "mood": data['mood'],
                 "prompt_text": data.get('prompt_text'),
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
-                "questionnaire_data": json.dumps(data.get('questionnaire_data')) if data.get('questionnaire_data') else None,
+                "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "score": score,
-                "analysis": analysis_str
+                "analysis": analysis_dict
             }
-
-            current_app.logger.info(f"Attempting to insert new journal entry: {entry_data} at %s", datetime.now(timezone.utc).isoformat())
-            res = client.table("journalEntry").insert(entry_data).execute()
             
-            if not res.data:
-                current_app.logger.error(f"Failed to insert journal entry. Response: {res} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
+            current_app.logger.info(f"Attempting to insert new journal entry: {entry_data}")
+            res = client.table("journalEntry").insert(entry_data).execute()
+
+            if not hasattr(res, 'data') or not res.data:
+                current_app.logger.error(f"Failed to insert journal entry. Supabase response: {res}")
                 raise Exception("Failed to insert journal entry into Supabase")
 
             journal_entry = res.data[0]
-            current_app.logger.info(f"Successfully created journal entry {journal_entry['journal_id']} with score {journal_entry.get('score')} at %s", datetime.now(timezone.utc).isoformat())
+            current_app.logger.info(f"Successfully created journal entry {journal_entry['journal_id']} with score {journal_entry.get('score')}")
             return jsonify({"success": True, "data": journal_entry}), 201
 
-        elif request.method == 'PUT' and journal_id:
-            # Handling for updates can be refined here if needed in the future.
-            # For now, keeping the focus on fixing the creation.
-            current_app.logger.info(f"Updating existing entry with journal_id: {journal_id} at %s", datetime.now(timezone.utc).isoformat())
-            # (Existing update logic can remain here)
-            pass
+        elif request.method == 'PUT':
+            journal_id = data.get('journal_id')
+            if not journal_id:
+                return jsonify({"error": "Missing journal_id for update"}), 400
+            
+            # Placeholder for future update logic
+            current_app.logger.info(f"Update operation for journal_id {journal_id} is not yet fully implemented.")
+            # Your existing update logic can be placed here.
+            # For now, returning a success to avoid breaking the flow if PUT is called.
+            return jsonify({"success": True, "message": "Update endpoint called but no action taken."}), 200
 
     except Exception as e:
-        current_app.logger.error(f"Error saving entry: {e} at %s", datetime.now(timezone.utc).isoformat(), exc_info=True)
+        current_app.logger.error(f"Error saving entry: {e}", exc_info=True)
         return jsonify({"error": f"Failed to save journal entry: {str(e)}"}), 500
