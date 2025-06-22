@@ -110,6 +110,8 @@ def save_journal_entry():
     if not data:
         return jsonify({"error": "Request body cannot be empty."}), 400
 
+    current_app.logger.info(f"Received data for journal entry: {json.dumps(data)}")
+
     try:
         if request.method == 'POST':
             # (Validation logic remains the same...)
@@ -152,7 +154,9 @@ def save_journal_entry():
             if not hasattr(res, 'data') or not res.data:
                 raise Exception(f"Failed to insert journal entry. Supabase response: {res}")
 
-            return jsonify({"success": True, "data": res.data[0]}), 201
+            response_data = res.data[0]
+            response_data['backend_version'] = 'v1.2-canary'  # Canary to verify deployment
+            return jsonify({"success": True, "data": response_data}), 201
 
         elif request.method == 'PUT':
             return jsonify({"success": True, "message": "Update endpoint called."}), 200
