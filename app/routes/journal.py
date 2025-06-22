@@ -86,16 +86,34 @@ def save_journal_entry():
             # Update existing entry
             current_app.logger.info(f"Updating existing entry with journal_id: {journal_id} at %s", datetime.now(timezone.utc).isoformat())
             update_data = {
-                "entry_text": data.get('content'),
-                "mood": data.get('mood'),
+                "entry_text": data.get('content', ''),
+                "mood": data.get('mood', ''),
                 "prompt_text": data.get('prompt_text'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "score": data.get('score'),  # Explicitly include score for updates
                 "analysis": data.get('analysis'),
             }
-            if 'score' in data and data['score'] is not None:
-                update_data['score'] = int(data['score']) if isinstance(data['score'], (int, float, str)) else None
+            # Ensure score is valid if provided
+            if 'score' in data:
+                try:
+                    update_data['score'] = int(float(str(data['score']))) if data['score'] is not None else None
+                    if update_data['score'] is not None and (update_data['score'] < 0 or update_data['score'] > 10):
+                        raise ValueError("Score must be between 0 and 10")
+                except (ValueError, TypeError):
+                    current_app.logger.error(f"Invalid score value: {data['score']} for journal_id {journal_id} at %s", datetime.now(timezone.utc).isoformat())
+                    return jsonify({"error": "Invalid score value, must be a number between 0 and 10"}), 400
+
+            # Fallback to score from analysis if score is missing
+            if update_data['score'] is None and 'analysis' in data and data['analysis']:
+                try:
+                    analysis_data = json.loads(data['analysis']) if isinstance(data['analysis'], str) else data['analysis']
+                    update_data['score'] = int(analysis_data.get('score', 5))
+                    current_app.logger.warning(f"Score missing in update, using fallback from analysis: {update_data['score']} at %s", datetime.now(timezone.utc).isoformat())
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    update_data['score'] = 5  # Default score
+                    current_app.logger.error(f"Failed to parse analysis for score, using default: {update_data['score']} at %s", datetime.now(timezone.utc).isoformat())
+
             if 'analysis' in data and data['analysis'] is not None:
                 try:
                     update_data['analysis'] = json.dumps(data['analysis']) if isinstance(data['analysis'], dict) else data['analysis']
@@ -104,12 +122,12 @@ def save_journal_entry():
                     update_data['analysis'] = None
 
             current_app.logger.info(f"Update data sent to Supabase: {update_data} at %s", datetime.now(timezone.utc).isoformat())
-            res = client.table("journalEntry").update(update_data).eq("journal_id", journal_id).execute()
+            res = client.table("journalEntry").update(update_data).eq("journal_id", journal_id).eq("user_id", user_id).execute()
             if not res.data or len(res.data) == 0:
-                raise Exception(f"Failed to update journal entry with journal_id: {journal_id}")
+                raise Exception(f"No rows updated for journal_id: {journal_id}. Check if entry exists or user_id matches.")
 
             journal_entry = res.data[0]
-            current_app.logger.info(f"Successfully updated journal entry {journal_id} at %s", datetime.now(timezone.utc).isoformat())
+            current_app.logger.info(f"Successfully updated journal entry {journal_id} with score {journal_entry['score']} at %s", datetime.now(timezone.utc).isoformat())
         else:
             # Create new entry
             score = data.get('score')
