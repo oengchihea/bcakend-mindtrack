@@ -132,58 +132,60 @@ def save_journal_entry():
 
             journal_entry = res.data[0]
             current_app.logger.info(f"Successfully updated journal entry {journal_id} with score {journal_entry['score']} at %s", datetime.now(timezone.utc).isoformat())
-        else:
-            # Create new entry
-            score = data.get('score')
-            analysis = data.get('analysis')
-            if score is None and analysis is None:
-                return jsonify({"error": "Missing required fields: score and/or analysis for new entries"}), 400
-            # Fallback to score from analysis if provided
-            if score is None and analysis is not None:
-                try:
-                    analysis_data = json.loads(analysis) if isinstance(analysis, str) else analysis
-                    score = int(analysis_data.get('score', 5))
-                    current_app.logger.warning(f"Score missing in request, using fallback from analysis: {score} at %s", datetime.now(timezone.utc).isoformat())
-                except (json.JSONDecodeError, TypeError, ValueError) as e:
-                    score = 5  # Default score if analysis parsing fails
-                    current_app.logger.error(f"Failed to parse analysis for score, using default: {score} at %s", datetime.now(timezone.utc).isoformat())
+            return jsonify({"success": True, "data": journal_entry}), 200
+        
+        # Logic for creating a new entry
+        score = data.get('score')
+        analysis = data.get('analysis')
 
-            try:
-                score = int(float(str(score)))
-                if score < 0 or score > 10:
-                    raise ValueError("Score must be between 0 and 10")
-            except (ValueError, TypeError) as e:
-                return jsonify({"error": "Invalid score value, must be a number between 0 and 10"}), 400
+        # Basic validation
+        if score is None:
+            return jsonify({"error": "Missing required field: score"}), 400
+        if analysis is None:
+            return jsonify({"error": "Missing required field: analysis"}), 400
 
-            try:
-                analysis = json.dumps(analysis) if isinstance(analysis, dict) else analysis
-                json.loads(analysis)
-            except (TypeError, ValueError, json.JSONDecodeError) as e:
-                return jsonify({"error": "Invalid analysis format, must be valid JSON"}), 400
+        # Score validation
+        try:
+            score = int(float(str(score)))
+            if not (0 <= score <= 10):
+                raise ValueError("Score must be between 0 and 10.")
+        except (ValueError, TypeError):
+            return jsonify({"error": "Invalid score value. Must be a number between 0 and 10."}), 400
 
-            entry_data = {
-                "journal_id": str(uuid.uuid4()) if not journal_id else journal_id,
-                "user_id": user_id,
-                "entry_text": data['content'],
-                "mood": data['mood'],
-                "prompt_text": data.get('prompt_text'),
-                "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
-                "questionnaire_data": json.dumps(data.get('questionnaire_data')) if data.get('questionnaire_data') else None,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": score,  # Enforce score with fallback
-                "analysis": analysis
-            }
+        # Analysis validation and serialization
+        try:
+            if isinstance(analysis, str):
+                json.loads(analysis) # Validate if it's a valid JSON string
+            elif isinstance(analysis, dict):
+                analysis = json.dumps(analysis)
+            else:
+                raise TypeError("Analysis must be a valid JSON object or string.")
+        except (json.JSONDecodeError, TypeError) as e:
+            return jsonify({"error": f"Invalid analysis format: {e}"}), 400
+            
+        entry_data = {
+            "journal_id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "entry_text": data['content'],
+            "mood": data['mood'],
+            "prompt_text": data.get('prompt_text'),
+            "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
+            "questionnaire_data": json.dumps(data.get('questionnaire_data')) if data.get('questionnaire_data') else None,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "score": score,
+            "analysis": analysis
+        }
 
-            current_app.logger.info(f"Insert data sent to Supabase: {entry_data} at %s", datetime.now(timezone.utc).isoformat())
-            res = client.table("journalEntry").insert(entry_data).execute() if not journal_id else client.table("journalEntry").update(entry_data).eq("journal_id", journal_id).eq("user_id", user_id).execute()
-            if not res.data or len(res.data) == 0:
-                current_app.logger.error(f"Failed to insert/update journal entry into Supabase at %s", datetime.now(timezone.utc).isoformat())
-                raise Exception("Failed to insert/update journal entry into Supabase")
+        current_app.logger.info(f"Insert data sent to Supabase: {entry_data} at %s", datetime.now(timezone.utc).isoformat())
+        res = client.table("journalEntry").insert(entry_data).execute()
+        if not res.data or len(res.data) == 0:
+            current_app.logger.error(f"Failed to insert journal entry into Supabase at %s", datetime.now(timezone.utc).isoformat())
+            raise Exception("Failed to insert journal entry into Supabase")
 
-            journal_entry = res.data[0]
-            current_app.logger.info(f"Successfully {'created' if not journal_id else 'updated'} journal entry {journal_entry['journal_id']} with score {journal_entry['score']} at %s", datetime.now(timezone.utc).isoformat())
-
-        return jsonify({"success": True, "data": journal_entry}), 201 if not journal_id else 200
+        journal_entry = res.data[0]
+        current_app.logger.info(f"Successfully created journal entry {journal_entry['journal_id']} with score {journal_entry.get('score')} at %s", datetime.now(timezone.utc).isoformat())
+        
+        return jsonify({"success": True, "data": journal_entry}), 201
 
     except (ValueError, TypeError) as e:
         current_app.logger.error(f"Invalid score or analysis data: {e} at %s", datetime.now(timezone.utc).isoformat(), exc_info=True)
