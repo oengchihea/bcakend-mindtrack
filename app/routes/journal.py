@@ -9,32 +9,41 @@ from postgrest import APIError
 journal_bp = Blueprint('journal_bp', __name__)
 
 def get_auth_client(app):
+    """
+    Creates a Supabase client authenticated with the user's token.
+    This ensures that all database operations respect Row Level Security (RLS).
+    """
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
-        current_app.logger.warning("Auth header missing or malformed at %s", datetime.now(timezone.utc).isoformat())
+        current_app.logger.warning("Auth header missing or malformed.")
         return None, None
 
     token = auth_header.split(" ")[1]
-    max_retries = 2
-    for attempt in range(max_retries):
-        try:
-            if not app.supabase:
-                current_app.logger.error("Supabase client not initialized in app context at %s", datetime.now(timezone.utc).isoformat())
-                return None, None
-            client = app.supabase
-            client.postgrest.auth(token)
-            user_response = client.auth.get_user(jwt=token)
-            if user_response.user:
-                return client, user_response.user.id
-            current_app.logger.warning(f"Auth attempt {attempt + 1} failed: No user response at %s", datetime.now(timezone.utc).isoformat())
-        except Exception as e:
-            current_app.logger.error(f"Auth client creation failed (attempt {attempt + 1}/{max_retries}): {e} at %s", datetime.now(timezone.utc).isoformat(), exc_info=True)
-            if attempt < max_retries - 1:
-                current_app.logger.info("Reinitializing Supabase client due to auth failure at %s", datetime.now(timezone.utc).isoformat())
-                app.supabase = create_client(app.config['SUPABASE_URL'], app.config['SUPABASE_KEY'])
-            else:
-                return None, None
-    return None, None
+    
+    # It's crucial to create a new client instance for the request
+    # and authenticate it with the user's token.
+    # This is often the root cause of RLS issues.
+    try:
+        # Create a new client instance for this request
+        url = app.config['SUPABASE_URL']
+        key = app.config['SUPABASE_KEY']
+        
+        # This client will be authenticated with the user's JWT
+        authenticated_client = create_client(url, key)
+        authenticated_client.postgrest.auth(token)
+        
+        # Verify the token is valid and get the user
+        user_response = authenticated_client.auth.get_user()
+        
+        if user_response.user:
+            return authenticated_client, user_response.user.id
+        else:
+            current_app.logger.warning("Token is invalid or expired.")
+            return None, None
+            
+    except Exception as e:
+        current_app.logger.error(f"Auth client creation failed: {e}", exc_info=True)
+        return None, None
 
 @journal_bp.route('/journal/entries', methods=['GET', 'DELETE'])
 def handle_journal_entries():
@@ -114,7 +123,7 @@ def save_journal_entry():
                 "mood": data['mood'],
                 "prompt_text": data.get('prompt_text'),
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
-                "questionnaire_data": data.get('questionnaire_data'),
+                "questionnaire_data": json.dumps(data.get('questionnaire_data')) if data.get('questionnaire_data') else None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "score": score,
                 "analysis": analysis_dict
