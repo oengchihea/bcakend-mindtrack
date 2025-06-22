@@ -1,3 +1,4 @@
+# journal.py
 import os
 import uuid
 import json
@@ -139,7 +140,7 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": score,  # Explicitly include score
+                "score": score,  # Explicitly include and enforce score
                 "analysis": analysis
             }
 
@@ -149,7 +150,7 @@ def save_journal_entry():
                 raise Exception("Failed to insert journal entry into Supabase")
 
             journal_entry = res.data[0]
-            current_app.logger.info(f"Successfully created journal entry {journal_entry['journal_id']} at %s", datetime.now(timezone.utc).isoformat())
+            current_app.logger.info(f"Successfully created journal entry {journal_entry['journal_id']} with score {journal_entry['score']} at %s", datetime.now(timezone.utc).isoformat())
 
         return jsonify({"success": True, "data": journal_entry}), 201 if not journal_id else 200
 
