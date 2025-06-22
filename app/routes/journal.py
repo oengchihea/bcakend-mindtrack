@@ -115,8 +115,17 @@ def save_journal_entry():
             # Create new entry
             score = data.get('score')
             analysis = data.get('analysis')
-            if score is None or analysis is None:
+            if score is None and analysis is None:
                 return jsonify({"error": "Missing required fields: score and analysis for new entries"}), 400
+            # Fallback to score from analysis if provided
+            if score is None and analysis is not None:
+                try:
+                    analysis_data = json.loads(analysis) if isinstance(analysis, str) else analysis
+                    score = int(analysis_data.get('score', 5))  # Default to 5 if no score in analysis
+                    current_app.logger.warning(f"Score missing in request, using fallback from analysis: {score} at %s", datetime.now(timezone.utc).isoformat())
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    score = 5  # Default score if analysis parsing fails
+                    current_app.logger.error(f"Failed to parse analysis for score, using default: {score} at %s", datetime.now(timezone.utc).isoformat())
 
             try:
                 score = int(float(str(score)))
@@ -140,7 +149,7 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": score,  # Explicitly include and enforce score
+                "score": score,  # Enforce score with fallback
                 "analysis": analysis
             }
 
