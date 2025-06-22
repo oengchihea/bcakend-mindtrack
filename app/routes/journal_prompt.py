@@ -4,7 +4,7 @@ import random
 
 journal_prompt_bp = Blueprint('journal_prompt_bp', __name__)
 
-@journal_prompt_bp.route('api/journal-prompt/generate', methods=['POST'])
+@journal_prompt_bp.route('/journal-prompt/generate', methods=['POST'])
 def generate_journal_prompts():
     current_app.logger.info("Received request for /api/journal-prompt/generate at %s", datetime.now(timezone.utc).isoformat())
     data = request.get_json()
@@ -27,11 +27,11 @@ def generate_journal_prompts():
         "Describe something you're grateful for right now.",
         "What's one thing you learned today?",
         "How are you feeling physically and emotionally at this moment?",
-        "What’s a goal you’re working toward, and what progress did you make today?",
+        "What's a goal you're working toward, and what progress did you make today?",
         "Describe a moment that made you smile recently.",
-        "What’s something you wish you had done differently today?",
+        "What's something you wish you had done differently today?",
         "How did you take care of yourself today?",
-        "What’s a memory from this week that stands out to you?"
+        "What's a memory from this week that stands out to you?"
     ]
 
     # Filter prompts based on mood, topic, or promptType

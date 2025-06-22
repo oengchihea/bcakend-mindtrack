@@ -96,7 +96,7 @@ def analyze_journal_content(content, questionnaire_data, user_id):
             "emoji": "😐"
         }
 
-@analyze_bp.route('/api/analyze-journal', methods=['POST'])
+@analyze_bp.route('/analyze-journal', methods=['POST'])
 def analyze_journal_only():
     current_app.logger.info(f"Route /api/analyze-journal hit with method POST at {datetime.now(timezone.utc).isoformat()}")
     
