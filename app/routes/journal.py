@@ -91,6 +91,8 @@ def save_journal_entry():
                 "prompt_text": data.get('prompt_text'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
+                "score": data.get('score'),  # Explicitly include score for updates
+                "analysis": data.get('analysis'),
             }
             if 'score' in data and data['score'] is not None:
                 update_data['score'] = int(data['score']) if isinstance(data['score'], (int, float, str)) else None
@@ -137,7 +139,7 @@ def save_journal_entry():
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
                 "questionnaire_data": data.get('questionnaire_data'),
                 "created_at": datetime.now(timezone.utc).isoformat(),
-                "score": score,
+                "score": score,  # Explicitly include score
                 "analysis": analysis
             }
 
