@@ -97,75 +97,34 @@ def analyze_journal_content(content, questionnaire_data, user_id):
         }
 
 @analyze_bp.route('/api/analyze-journal', methods=['POST'])
-def analyze_and_save_journal():
+def analyze_journal_only():
     current_app.logger.info(f"Route /api/analyze-journal hit with method POST at {datetime.now(timezone.utc).isoformat()}")
+    
+    # Optional: If you want to keep authentication on this endpoint
     client, user_id = get_auth_client(current_app._get_current_object())
     if not client or not user_id:
         current_app.logger.error(f"Authentication failed for user request at {datetime.now(timezone.utc).isoformat()}")
         return jsonify({"error": "Authentication failed"}), 401
 
     data = request.get_json()
-    if not data or 'content' not in data or 'questionnaireData' not in data or 'userId' not in data:
-        current_app.logger.warning(f"Missing required fields in request at {datetime.now(timezone.utc).isoformat()}")
-        return jsonify({"error": "Missing required fields: content, questionnaireData, and userId"}), 400
+    if not data or 'content' not in data:
+        current_app.logger.warning(f"Missing 'content' field in request at {datetime.now(timezone.utc).isoformat()}")
+        return jsonify({"error": "Missing required field: content"}), 400
 
-    content = data['content']
-    questionnaire_data = data['questionnaireData']
+    content = data.get('content')
+    questionnaire_data = data.get('questionnaireData', {})
+    
     try:
-        # Validate userId from request matches authenticated userId
-        if data['userId'] != user_id:
-            current_app.logger.warning(f"Access denied: Mismatched user ID {data['userId']} vs {user_id} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify({"error": "Access denied: Mismatched user ID"}), 403
-
-        # Analyze the journal content
         current_app.logger.info(f"Received analyze-journal request for user {user_id} with content: {content[:50]}... at {datetime.now(timezone.utc).isoformat()}")
         analysis_result = analyze_journal_content(content, questionnaire_data, user_id)
+        
         if "error" in analysis_result:
             current_app.logger.error(f"Analysis failed with error: {analysis_result['error']} at {datetime.now(timezone.utc).isoformat()}")
             return jsonify(analysis_result), 500
 
-        # Ensure score is an integer and included
-        score = int(analysis_result.get('score', 5))
-        analysis_result['score'] = score
-
-        # Validate analysis result
-        if not isinstance(analysis_result, dict) or 'sentiment' not in analysis_result or 'score' not in analysis_result:
-            current_app.logger.error(f"Invalid analysis result format: {analysis_result} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify({"error": "Invalid analysis result format"}), 500
-
-        # Prepare data for saving to Supabase with guaranteed score
-        journal_entry = {
-            "journal_id": str(uuid.uuid4()),
-            "user_id": user_id,
-            "entry_text": content,
-            "mood": questionnaire_data.get("mood_word", "neutral"),
-            "prompt_text": questionnaire_data.get("prompts_and_answers", [{}])[0].get("prompt") if questionnaire_data.get("prompts_and_answers") else None,
-            "entry_type": questionnaire_data.get("journal_interaction_type", "Journal"),
-            "questionnaire_data": json.dumps(questionnaire_data) if questionnaire_data else None,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "score": score,
-            "analysis": json.dumps(analysis_result)
-        }
-
-        current_app.logger.info(f"Attempting to save journal entry to Supabase: {journal_entry} at {datetime.now(timezone.utc).isoformat()}")
-        try:
-            res = client.table("journalEntry").insert(journal_entry).execute()
-            if not res.data or len(res.data) == 0:
-                current_app.logger.error(f"Failed to insert journal entry into Supabase at {datetime.now(timezone.utc).isoformat()}")
-                raise Exception("Failed to insert journal entry into Supabase")
-        except APIError as e:
-            current_app.logger.error(f"Supabase API Error on insert: {e.message} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
-            return jsonify({"error": f"Database error: {e.message}"}), 500
-
-        journal_entry_response = res.data[0]
-        current_app.logger.info(f"Successfully saved journal entry {journal_entry_response['journal_id']} with score {journal_entry_response.get('score')} at {datetime.now(timezone.utc).isoformat()}")
-
-        return jsonify({
-            "success": True,
-            "data": journal_entry_response,
-            "analysis": analysis_result
-        }), 201
+        current_app.logger.info(f"Successfully analyzed journal for user {user_id}, returning analysis. at {datetime.now(timezone.utc).isoformat()}")
+        return jsonify(analysis_result), 200
 
     except Exception as e:
-        current_app.logger.error(f"Error analyzing or saving journal entry: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
-        return jsonify({"error": f"Failed to analyze or save journal entry: {str(e)}"}), 500
+        current_app.logger.error(f"Error analyzing journal entry: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
+        return jsonify({"error": f"Failed to analyze journal entry: {str(e)}"}), 500
