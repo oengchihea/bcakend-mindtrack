@@ -124,7 +124,7 @@ def analyze_and_save_journal():
             current_app.logger.error(f"Analysis failed with error: {analysis_result['error']} at {datetime.now(timezone.utc).isoformat()}")
             return jsonify(analysis_result), 500
 
-        # Ensure score is an integer
+        # Ensure score is an integer and included
         score = int(analysis_result.get('score', 5))
         analysis_result['score'] = score
 
@@ -133,7 +133,7 @@ def analyze_and_save_journal():
             current_app.logger.error(f"Invalid analysis result format: {analysis_result} at {datetime.now(timezone.utc).isoformat()}")
             return jsonify({"error": "Invalid analysis result format"}), 500
 
-        # Prepare data for saving to Supabase
+        # Prepare data for saving to Supabase with guaranteed score
         journal_entry = {
             "journal_id": str(uuid.uuid4()),
             "user_id": user_id,
@@ -143,7 +143,7 @@ def analyze_and_save_journal():
             "entry_type": questionnaire_data.get("journal_interaction_type", "Journal"),
             "questionnaire_data": json.dumps(questionnaire_data) if questionnaire_data else None,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "score": score,
+            "score": score,  # Ensure score is always included
             "analysis": json.dumps(analysis_result)
         }
 
