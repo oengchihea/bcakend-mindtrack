@@ -1,4 +1,3 @@
-# journal.py
 import os
 import uuid
 import json
@@ -69,7 +68,7 @@ def handle_journal_entries():
             current_app.logger.error(f"Error on DELETE: {e} at %s", datetime.now(timezone.utc).isoformat(), exc_info=True)
             return jsonify({"error": "Failed to delete entries"}), 500
 
-@journal_bp.route('/journalEntry', methods=['POST'])
+@journal_bp.route('/journalEntry', methods=['POST', 'PUT'])
 def save_journal_entry():
     client, user_id = get_auth_client(current_app._get_current_object())
     if not client or not user_id:
@@ -80,10 +79,10 @@ def save_journal_entry():
         return jsonify({"error": "Missing required fields: content and mood"}), 400
 
     try:
-        # Check if journal_id exists for update
+        # Check if journal_id exists for update or create
         journal_id = data.get('journal_id')
 
-        if journal_id:
+        if journal_id and request.method == 'PUT':
             # Update existing entry
             current_app.logger.info(f"Updating existing entry with journal_id: {journal_id} at %s", datetime.now(timezone.utc).isoformat())
             update_data = {
