@@ -168,7 +168,7 @@ def save_journal_entry():
                 "mood": data['mood'],
                 "prompt_text": data.get('prompt_text'),
                 "entry_type": data.get('questionnaire_data', {}).get('journal_interaction_type', 'Journal'),
-                "questionnaire_data": data.get('questionnaire_data'),
+                "questionnaire_data": json.dumps(data.get('questionnaire_data')) if data.get('questionnaire_data') else None,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "score": score,  # Enforce score with fallback
                 "analysis": analysis

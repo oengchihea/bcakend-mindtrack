@@ -143,22 +143,26 @@ def analyze_and_save_journal():
             "entry_type": questionnaire_data.get("journal_interaction_type", "Journal"),
             "questionnaire_data": json.dumps(questionnaire_data) if questionnaire_data else None,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "score": score,  # Ensure score is always included
+            "score": score,
             "analysis": json.dumps(analysis_result)
         }
 
         current_app.logger.info(f"Attempting to save journal entry to Supabase: {journal_entry} at {datetime.now(timezone.utc).isoformat()}")
-        res = client.table("journalEntry").insert(journal_entry).execute()
-        if not res.data or len(res.data) == 0:
-            current_app.logger.error(f"Failed to insert journal entry into Supabase at {datetime.now(timezone.utc).isoformat()}")
-            raise Exception("Failed to insert journal entry into Supabase")
+        try:
+            res = client.table("journalEntry").insert(journal_entry).execute()
+            if not res.data or len(res.data) == 0:
+                current_app.logger.error(f"Failed to insert journal entry into Supabase at {datetime.now(timezone.utc).isoformat()}")
+                raise Exception("Failed to insert journal entry into Supabase")
+        except APIError as e:
+            current_app.logger.error(f"Supabase API Error on insert: {e.message} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
+            return jsonify({"error": f"Database error: {e.message}"}), 500
 
-        journal_entry = res.data[0]
-        current_app.logger.info(f"Successfully saved journal entry {journal_entry['journal_id']} with score {journal_entry['score']} at {datetime.now(timezone.utc).isoformat()}")
+        journal_entry_response = res.data[0]
+        current_app.logger.info(f"Successfully saved journal entry {journal_entry_response['journal_id']} with score {journal_entry_response.get('score')} at {datetime.now(timezone.utc).isoformat()}")
 
         return jsonify({
             "success": True,
-            "data": journal_entry,
+            "data": journal_entry_response,
             "analysis": analysis_result
         }), 201
 
