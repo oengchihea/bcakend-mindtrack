@@ -2,72 +2,35 @@ import os
 import uuid
 import json
 from datetime import datetime, timezone
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from supabase import create_client, Client
 from postgrest import APIError
+from .auth import auth_required
 
 journal_bp = Blueprint('journal_bp', __name__)
 
-def get_auth_client(app):
-    """
-    Creates a Supabase client authenticated with the user's token.
-    This ensures that all database operations respect Row Level Security (RLS).
-    """
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        current_app.logger.warning("Auth header missing or malformed.")
-        return None, None
-
-    token = auth_header.split(" ")[1]
-    
-    try:
-        url = app.config['SUPABASE_URL']
-        key = app.config['SUPABASE_KEY']
-        
-        # Create a new client instance for this request
-        authenticated_client = create_client(url, key)
-        
-        # Verify the token is valid by passing it to get_user()
-        user_response = authenticated_client.auth.get_user(token)
-        
-        if user_response.user:
-            # For subsequent database calls, ensure the client is authenticated
-            authenticated_client.postgrest.auth(token)
-            return authenticated_client, user_response.user.id
-        else:
-            current_app.logger.warning("Token is invalid or expired.")
-            return None, None
-            
-    except Exception as e:
-        current_app.logger.error(f"Auth client creation failed: {e}", exc_info=True)
-        return None, None
-
-def get_service_client(app):
+def get_service_client():
     """
     Creates a Supabase client with the service role key to bypass RLS.
     This should be used with extreme caution and only for authorized writes.
     """
-    service_key = app.config.get('SUPABASE_SERVICE_ROLE_KEY')
+    service_key = current_app.config.get('SUPABASE_SERVICE_ROLE_KEY')
     if not service_key:
         current_app.logger.error("FATAL: SUPABASE_SERVICE_ROLE_KEY is not configured.")
         return None
     try:
-        url = app.config['SUPABASE_URL']
+        url = current_app.config['SUPABASE_URL']
         return create_client(url, service_key)
     except Exception as e:
         current_app.logger.error(f"Failed to create service client: {e}")
         return None
 
 @journal_bp.route('/journal/entries', methods=['GET', 'DELETE'])
+@auth_required
 def handle_journal_entries():
     current_app.logger.info(f"Route /api/journal/entries hit with method: {request.method} at %s", datetime.now(timezone.utc).isoformat())
-    client, user_id = get_auth_client(current_app._get_current_object())
-    if not client or not user_id:
-        return jsonify({"error": "Authentication failed"}), 401
-
-    query_user_id = request.args.get('userId')
-    if query_user_id != user_id:
-        return jsonify({"error": "Access denied: Mismatched user ID"}), 403
+    user_id = g.user.id
+    client = current_app.supabase # RLS is handled by the auth_required decorator
 
     if request.method == 'GET':
         try:
@@ -91,15 +54,13 @@ def handle_journal_entries():
             return jsonify({"error": "Failed to delete entries"}), 500
 
 @journal_bp.route('/journalEntry', methods=['POST', 'PUT'])
+@auth_required
 def save_journal_entry():
-    # Step 1: Securely authenticate the user to get their ID.
-    _, user_id = get_auth_client(current_app._get_current_object())
-    if not user_id:
-        return jsonify({"error": "Authentication failed. User ID could not be verified."}), 401
+    user_id = g.user.id
 
     # Step 2: Get the privileged service client to perform the write.
     # This bypasses any RLS issues on the table.
-    service_client = get_service_client(current_app._get_current_object())
+    service_client = get_service_client()
     if not service_client:
         return jsonify({"error": "Server configuration error. Cannot save data."}), 500
 

@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, g
 from supabase import Client, create_client
 import os
 from datetime import datetime
@@ -37,38 +37,48 @@ except Exception as e:
 
 auth_bp = Blueprint('auth', __name__)
 
-def verify_token(f):
-    """Decorator to verify JWT tokens from Supabase"""
+def auth_required(f):
+    """
+    Decorator to ensure a user is authenticated.
+    Verifies the JWT token from the Authorization header, sets the
+    Supabase client's auth context for RLS, and stores the user
+    object in Flask's request context `g`.
+    """
     @wraps(f)
     def decorated_function(*args, **kwargs):
+        from flask import current_app
         auth_header = request.headers.get('Authorization')
-        
-        if auth_header:
-            try:
-                token = auth_header.split(' ')[1] if auth_header.startswith('Bearer ') else auth_header
-            except IndexError:
-                return jsonify({'error': 'Invalid token format'}), 401
-        else:
-            return jsonify({'error': 'Token is missing'}), 401
-        
-        try:
-            user_response = supabase.auth.get_user(token)
-            
-            if not user_response or not user_response.user:
-                return jsonify({'error': 'Token verification failed'}), 401
-            
-            request.current_user = user_response.user
-            request.auth_token = token
-            
-        except Exception as e:
-            return jsonify({'error': 'Token verification failed'}), 401
-        
-        return f(*args, **kwargs)
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'Authorization header is required', 'code': 'AUTH_HEADER_MISSING'}), 401
 
+        try:
+            token = auth_header.split(' ')[1]
+            
+            # Set auth for the request-bound supabase client for RLS
+            current_app.supabase.postgrest.auth(token)
+            
+            user_response = current_app.supabase.auth.get_user(token)
+
+            if not user_response or not user_response.user:
+                # Clear potentially invalid auth token
+                current_app.supabase.postgrest.auth(None)
+                return jsonify({'error': 'Invalid or expired token', 'code': 'INVALID_TOKEN'}), 401
+
+            # Store user and token in the request context `g` for use in the route
+            g.user = user_response.user
+            g.token = token
+
+        except Exception as e:
+            # Ensure auth context is cleared on any failure
+            if hasattr(current_app, 'supabase') and hasattr(current_app.supabase, 'postgrest'):
+                current_app.supabase.postgrest.auth(None)
+            return jsonify({'error': 'Token verification failed', 'details': str(e), 'code': 'TOKEN_VERIFICATION_FAILED'}), 401
+
+        return f(*args, **kwargs)
     return decorated_function
 
 @auth_bp.route('/change-password', methods=['POST'])
-@verify_token
+@auth_required
 def change_password():
     """Change user password with current password verification"""
     if not request.is_json:
@@ -101,7 +111,7 @@ def change_password():
 
     try:
         # Get current user email
-        current_user = request.current_user
+        current_user = g.user
         user_email = current_user.email
         
         if not user_email:
@@ -535,10 +545,10 @@ def verify_token_status():
         return jsonify({'valid': False, 'error': str(e)}), 401
 
 @auth_bp.route('/test-verify-token', methods=['GET'])
-@verify_token
+@auth_required
 def test_verify_token():
     """Test endpoint to verify if token verification is working"""
-    user = request.current_user
+    user = g.user
     return jsonify({
         "message": "Token is valid",
         "user_id": user.id,

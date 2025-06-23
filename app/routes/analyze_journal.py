@@ -2,39 +2,12 @@ import os
 import uuid
 import json
 from datetime import datetime, timezone
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from supabase import create_client, Client
 from postgrest import APIError
+from .auth import auth_required
 
 analyze_bp = Blueprint('analyze_bp', __name__)
-
-def get_auth_client(app):
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        current_app.logger.warning("Auth header missing or malformed at %s", datetime.now(timezone.utc).isoformat())
-        return None, None
-
-    token = auth_header.split(" ")[1]
-    max_retries = 2
-    for attempt in range(max_retries):
-        try:
-            if not app.supabase:
-                current_app.logger.error("Supabase client not initialized in app context at %s", datetime.now(timezone.utc).isoformat())
-                return None, None
-            client = app.supabase
-            client.postgrest.auth(token)
-            user_response = client.auth.get_user(jwt=token)
-            if user_response.user:
-                return client, user_response.user.id
-            current_app.logger.warning(f"Auth attempt {attempt + 1} failed: No user response at %s", datetime.now(timezone.utc).isoformat())
-        except Exception as e:
-            current_app.logger.error(f"Auth client creation failed (attempt {attempt + 1}/{max_retries}): {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
-            if attempt < max_retries - 1:
-                current_app.logger.info("Reinitializing Supabase client due to auth failure at %s", datetime.now(timezone.utc).isoformat())
-                app.supabase = create_client(app.config['SUPABASE_URL'], app.config['SUPABASE_KEY'])
-            else:
-                return None, None
-    return None, None
 
 def analyze_journal_content(content, questionnaire_data, user_id):
     try:
@@ -97,14 +70,11 @@ def analyze_journal_content(content, questionnaire_data, user_id):
         }
 
 @analyze_bp.route('/analyze-journal', methods=['POST'])
+@auth_required
 def analyze_journal_only():
     current_app.logger.info(f"Route /api/analyze-journal hit with method POST at {datetime.now(timezone.utc).isoformat()}")
     
-    # Optional: If you want to keep authentication on this endpoint
-    client, user_id = get_auth_client(current_app._get_current_object())
-    if not client or not user_id:
-        current_app.logger.error(f"Authentication failed for user request at {datetime.now(timezone.utc).isoformat()}")
-        return jsonify({"error": "Authentication failed"}), 401
+    user_id = g.user.id
 
     data = request.get_json()
     if not data or 'content' not in data:
