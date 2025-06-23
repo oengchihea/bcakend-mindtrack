@@ -20,22 +20,19 @@ def get_auth_client(app):
 
     token = auth_header.split(" ")[1]
     
-    # It's crucial to create a new client instance for the request
-    # and authenticate it with the user's token.
-    # This is often the root cause of RLS issues.
     try:
-        # Create a new client instance for this request
         url = app.config['SUPABASE_URL']
         key = app.config['SUPABASE_KEY']
         
-        # This client will be authenticated with the user's JWT
+        # Create a new client instance for this request
         authenticated_client = create_client(url, key)
-        authenticated_client.postgrest.auth(token)
         
-        # Verify the token is valid and get the user
-        user_response = authenticated_client.auth.get_user()
+        # Verify the token is valid by passing it to get_user()
+        user_response = authenticated_client.auth.get_user(token)
         
         if user_response.user:
+            # For subsequent database calls, ensure the client is authenticated
+            authenticated_client.postgrest.auth(token)
             return authenticated_client, user_response.user.id
         else:
             current_app.logger.warning("Token is invalid or expired.")
@@ -75,16 +72,8 @@ def handle_journal_entries():
     if request.method == 'GET':
         try:
             res = client.table("journalEntry").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
-            
-            # Add a version marker to each entry to confirm deployment
-            modified_data = []
-            if res.data:
-                for entry in res.data:
-                    entry['backend_version'] = 'v1.4-final-test'
-                    modified_data.append(entry)
-
-            current_app.logger.info(f"Successfully fetched {len(modified_data)} entries for user {user_id} at %s", datetime.now(timezone.utc).isoformat())
-            return jsonify(modified_data or []), 200
+            current_app.logger.info(f"Successfully fetched {len(res.data)} entries for user {user_id} at %s", datetime.now(timezone.utc).isoformat())
+            return jsonify(res.data or []), 200
         except APIError as e:
             current_app.logger.error(f"Supabase API Error on GET: {e.message} at %s", datetime.now(timezone.utc).isoformat(), exc_info=True)
             return jsonify({"error": f"Database error: {e.message}"}), 500
