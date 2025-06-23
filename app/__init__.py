@@ -73,6 +73,9 @@ def create_app():
         app.register_blueprint(journal_prompt_bp, url_prefix='/api')
         logging.info("Successfully registered 'journal_prompt_bp' blueprint with /api prefix.")
 
+        from .routes.events import events_bp
+        app.register_blueprint(events_bp)
+
         # Debug route to confirm /api/journalScore is accessible
         @app.route('/api/journalScore', methods=['GET'])
         def debug_journal_score():
