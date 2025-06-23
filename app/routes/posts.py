@@ -1,53 +1,21 @@
 from flask import Blueprint, request, jsonify, current_app, g
 from datetime import datetime
 import uuid
-from functools import wraps
+from app.routes.auth import auth_required
 from app.middleware.spam_middleware import spam_protection
 from app.services.auto_spam_detector_service import spam_detector
 posts_bp = Blueprint('posts', __name__)
-
-def auth_required(f):
-    """Decorator to require authentication for routes"""
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        # Get the authorization header
-        auth_header = request.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return jsonify({'error': 'Authorization token required'}), 401
-        
-        try:
-            # Extract token from header
-            token = auth_header.split(' ')[1]
-            
-            # Verify token with Supabase
-            user = current_app.supabase.auth.get_user(token)
-            if not user.user:
-                return jsonify({'error': 'Invalid or expired token'}), 401
-            
-            # Store user info in Flask's g object for use in the route
-            g.current_user = user.user
-            g.access_token = token  # Store token for RLS
-            
-            # IMPORTANT: Set the JWT for RLS policies
-            current_app.supabase.postgrest.auth(token)
-            
-        except Exception as e:
-            print(f"Authentication error: {e}")
-            return jsonify({'error': 'Authentication failed'}), 401
-        
-        return f(*args, **kwargs)
-    return decorated_function
 
 # ============================================================================
 # USER LIMITS ENDPOINT
 # ============================================================================
 
-@posts_bp.route('/user-limits', methods=['GET'])
+@posts_bp.route('/posts/user-limits', methods=['GET'])
 @auth_required
 def get_user_limits():
     """Get current user's posting limits and usage"""
     try:
-        user_id = g.current_user.id
+        user_id = g.user.id
         limits_info = spam_detector.get_user_limits(user_id, current_app.supabase)
         return jsonify(limits_info), 200
         
@@ -59,7 +27,7 @@ def get_user_limits():
 # POSTS ENDPOINTS WITH AUTO SPAM PROTECTION
 # ============================================================================
 
-@posts_bp.route('/create', methods=['POST'])
+@posts_bp.route('/posts/create', methods=['POST'])
 @auth_required
 @spam_protection  # Automatically blocks spam
 def create_post():
@@ -68,7 +36,7 @@ def create_post():
         data = request.get_json()
         
         # Extract user_id from authenticated user (UUID format)
-        user_id = g.current_user.id
+        user_id = g.user.id
         
         # Validate required fields
         required_fields = ['title', 'content']
@@ -131,7 +99,7 @@ def create_post():
         print(f"Error creating post: {e}")
         return jsonify({'error': str(e)}), 500
 
-@posts_bp.route('/', methods=['GET'])
+@posts_bp.route('/posts', methods=['GET'])
 @auth_required
 def get_all_posts():
     """Get all posts (public feed) with user information"""
@@ -177,7 +145,7 @@ def get_all_posts():
         print(f"Error getting posts: {e}")
         return jsonify({'error': str(e)}), 500
 
-@posts_bp.route('/<post_id>', methods=['GET'])
+@posts_bp.route('/posts/<post_id>', methods=['GET'])
 @auth_required
 def get_post(post_id):
     """Get a specific post by ID with user information"""
@@ -216,14 +184,14 @@ def get_post(post_id):
         print(f"Error getting post: {e}")
         return jsonify({'error': str(e)}), 500
 
-@posts_bp.route('/<post_id>', methods=['PUT'])
+@posts_bp.route('/posts/<post_id>', methods=['PUT'])
 @auth_required
 @spam_protection  # Add spam protection
 def update_post(post_id):
     """Update an existing post (only by the owner)"""
     try:
         data = request.get_json()
-        user_id = g.current_user.id
+        user_id = g.user.id
         
         # Check if post exists and belongs to the user
         existing_post = current_app.supabase.table('posts').select('*').eq('post_id', post_id).eq('user_id', user_id).execute()
@@ -263,12 +231,12 @@ def update_post(post_id):
         print(f"Error updating post: {e}")
         return jsonify({'error': str(e)}), 500
 
-@posts_bp.route('/<post_id>', methods=['DELETE'])
+@posts_bp.route('/posts/<post_id>', methods=['DELETE'])
 @auth_required
 def delete_post(post_id):
     """Delete a post (only by the owner)"""
     try:
-        user_id = g.current_user.id
+        user_id = g.user.id
         
         # Check if post exists and belongs to the user
         existing_post = current_app.supabase.table('posts').select('*').eq('post_id', post_id).eq('user_id', user_id).execute()
@@ -293,12 +261,12 @@ def delete_post(post_id):
         print(f"Error deleting post: {e}")
         return jsonify({'error': str(e)}), 500
 
-@posts_bp.route('/my-posts', methods=['GET'])
+@posts_bp.route('/posts/my-posts', methods=['GET'])
 @auth_required
 def get_my_posts():
     """Get all posts by the authenticated user"""
     try:
-        user_id = g.current_user.id
+        user_id = g.user.id
         limit = request.args.get('limit', 50, type=int)
         offset = request.args.get('offset', 0, type=int)
         
@@ -337,7 +305,7 @@ def get_my_posts():
 # COMMENTS ENDPOINTS WITH AUTO SPAM PROTECTION
 # ============================================================================
 
-@posts_bp.route('/<post_id>/comments', methods=['GET'])
+@posts_bp.route('/posts/<post_id>/comments', methods=['GET'])
 @auth_required
 def get_comments(post_id):
     """Get all comments for a post"""
@@ -382,14 +350,14 @@ def get_comments(post_id):
         print(f"Error getting comments: {e}")
         return jsonify({'error': str(e)}), 500
 
-@posts_bp.route('/<post_id>/comments', methods=['POST'])
+@posts_bp.route('/posts/<post_id>/comments', methods=['POST'])
 @auth_required
 @spam_protection  # Add spam protection
 def create_comment(post_id):
     """Create a new comment on a post"""
     try:
         data = request.get_json()
-        user_id = g.current_user.id
+        user_id = g.user.id
         
         # Check if post exists
         post_result = current_app.supabase.table('posts').select('post_id').eq('post_id', post_id).execute()
@@ -452,14 +420,14 @@ def create_comment(post_id):
         print(f"Error creating comment: {e}")
         return jsonify({'error': str(e)}), 500
 
-@posts_bp.route('/<post_id>/comments/<comment_id>', methods=['PUT'])
+@posts_bp.route('/posts/<post_id>/comments/<comment_id>', methods=['PUT'])
 @auth_required
 @spam_protection  # Add spam protection
 def update_comment(post_id, comment_id):
     """Update a comment (only by the owner)"""
     try:
         data = request.get_json()
-        user_id = g.current_user.id
+        user_id = g.user.id
         
         # Check if comment exists and belongs to the user
         existing_comment = current_app.supabase.table('comments').select('*').eq('id', comment_id).eq('user_id', user_id).eq('post_id', post_id).execute()
@@ -498,12 +466,12 @@ def update_comment(post_id, comment_id):
         print(f"Error updating comment: {e}")
         return jsonify({'error': str(e)}), 500
 
-@posts_bp.route('/<post_id>/comments/<comment_id>', methods=['DELETE'])
+@posts_bp.route('/posts/<post_id>/comments/<comment_id>', methods=['DELETE'])
 @auth_required
 def delete_comment(post_id, comment_id):
     """Delete a comment (only by the owner)"""
     try:
-        user_id = g.current_user.id
+        user_id = g.user.id
         
         # Check if comment exists and belongs to the user
         existing_comment = current_app.supabase.table('comments').select('*').eq('id', comment_id).eq('user_id', user_id).eq('post_id', post_id).execute()
@@ -526,7 +494,7 @@ def delete_comment(post_id, comment_id):
 # UTILITY ENDPOINTS
 # ============================================================================
 
-@posts_bp.route('/health', methods=['GET'])
+@posts_bp.route('/posts/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({
@@ -535,12 +503,12 @@ def health_check():
         'timestamp': datetime.utcnow().isoformat()
     }), 200
 
-@posts_bp.route('/stats', methods=['GET'])
+@posts_bp.route('/posts/stats', methods=['GET'])
 @auth_required
 def get_stats():
     """Get statistics for the authenticated user"""
     try:
-        user_id = g.current_user.id
+        user_id = g.user.id
         
         # Get post count
         posts_result = current_app.supabase.table('posts').select('post_id', count='exact').eq('user_id', user_id).execute()

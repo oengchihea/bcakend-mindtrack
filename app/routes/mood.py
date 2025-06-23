@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 import uuid
 import re
 import requests
@@ -7,6 +7,7 @@ import json
 import time
 from typing import Dict, Any, Optional, List
 import os
+from app.routes.auth import auth_required
 
 mood_bp = Blueprint('mood', __name__)
 
@@ -683,55 +684,10 @@ class MoodService:
             print(f'❌ Error fetching mood entries: {str(e)}')
             return []
 
-def verify_token(token):
-    """Verify Supabase JWT token"""
-    try:
-        response = current_app.supabase.auth.get_user(token)
-        if not response or not response.user:
-            return None
-        user_id = response.user.id
-        if not user_id:
-            return None
-        
-        # Allow test user IDs
-        test_user_ids = ['user123', 'test-user', 'demo-user']
-        if user_id in test_user_ids:
-            return user_id
-            
-        if not uuid_regex.match(user_id):
-            return None
-        return user_id
-    except Exception as e:
-        print(f'❌ Token verification error: {str(e)}')
-        return None
-
-def create_authenticated_supabase_client(token):
-    """Create authenticated Supabase client"""
-    from supabase import create_client
-    
-    client = create_client(
-        current_app.supabase.supabase_url,
-        current_app.supabase.supabase_key
-    )
-    
-    client.postgrest.session.headers.update({
-        'Authorization': f'Bearer {token}'
-    })
-    
-    return client
-
 @mood_bp.route('/mood/check-today', methods=['GET'])
+@auth_required
 def check_today_mood():
     """Check if user has submitted mood today with strict enforcement"""
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        return jsonify({'error': 'Missing or invalid Authorization header'}), 401
-    
-    token = auth_header.split(' ')[1]
-    authenticated_user_id = verify_token(token)
-    if not authenticated_user_id:
-        return jsonify({'error': 'Invalid access token'}), 401
-    
     user_id = request.args.get('userId')
     if not user_id:
         return jsonify({'error': 'Invalid or missing user_id'}), 400
@@ -741,14 +697,17 @@ def check_today_mood():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     
+    # Use the authenticated user ID from the decorator context
+    authenticated_user_id = g.user.id
+
     # Skip user ID mismatch check for test users
     test_user_ids = ['user123', 'test-user', 'demo-user']
     if user_id not in test_user_ids and authenticated_user_id != user_id:
         return jsonify({'error': 'Unauthorized: User ID mismatch'}), 403
     
     try:
-        authenticated_supabase = create_authenticated_supabase_client(token)
-        mood_service = MoodService(authenticated_supabase)
+        # The supabase client is already authenticated by the decorator
+        mood_service = MoodService(current_app.supabase)
         
         existing_entry = mood_service.check_daily_mood_exists(user_id)
         
@@ -777,18 +736,10 @@ def check_today_mood():
         return jsonify({'error': 'Internal server error'}), 500
 
 @mood_bp.route('/mood', methods=['POST'])
+@auth_required
 def save_mood_entry():
     """Save new mood entry with strict daily limit and Gemini AI analysis"""
     start_time = time.time()
-    
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        return jsonify({'error': 'Missing or invalid Authorization header'}), 401
-    
-    token = auth_header.split(' ')[1]
-    authenticated_user_id = verify_token(token)
-    if not authenticated_user_id:
-        return jsonify({'error': 'Invalid access token'}), 401
 
     data = request.get_json()
     if not data:
@@ -808,6 +759,9 @@ def save_mood_entry():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     
+    # Use the authenticated user ID from the decorator context
+    authenticated_user_id = g.user.id
+    
     # Skip user ID mismatch check for test users
     test_user_ids = ['user123', 'test-user', 'demo-user']
     if user_id not in test_user_ids and authenticated_user_id != user_id:
@@ -819,8 +773,8 @@ def save_mood_entry():
     try:
         print(f'💾 Processing mood entry for user: {user_id}')
         
-        authenticated_supabase = create_authenticated_supabase_client(token)
-        mood_service = MoodService(authenticated_supabase)
+        # The supabase client is already authenticated by the decorator
+        mood_service = MoodService(current_app.supabase)
         
         # Strict daily limit check FIRST
         print('🔍 Checking daily limit enforcement...')
@@ -859,17 +813,9 @@ def save_mood_entry():
         return jsonify({'error': 'Internal server error'}), 500
 
 @mood_bp.route('/mood', methods=['GET'])
+@auth_required
 def get_mood_entries():
     """Get user's mood entries"""
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
-        return jsonify({'error': 'Missing or invalid Authorization header'}), 401
-    
-    token = auth_header.split(' ')[1]
-    authenticated_user_id = verify_token(token)
-    if not authenticated_user_id:
-        return jsonify({'error': 'Invalid access token'}), 401
-
     user_id = request.args.get('userId')
     if not user_id:
         return jsonify({'error': 'Invalid or missing user_id'}), 400
@@ -879,14 +825,17 @@ def get_mood_entries():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     
+    # Use the authenticated user ID from the decorator context
+    authenticated_user_id = g.user.id
+    
     # Skip user ID mismatch check for test users
     test_user_ids = ['user123', 'test-user', 'demo-user']
     if user_id not in test_user_ids and authenticated_user_id != user_id:
         return jsonify({'error': 'Unauthorized: User ID mismatch'}), 403
 
     try:
-        authenticated_supabase = create_authenticated_supabase_client(token)
-        mood_service = MoodService(authenticated_supabase)
+        # The supabase client is already authenticated by the decorator
+        mood_service = MoodService(current_app.supabase)
         
         entries = mood_service.get_recent_mood_entries(user_id)
         

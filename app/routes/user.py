@@ -1,48 +1,14 @@
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from datetime import datetime, date, timedelta
 import uuid
 import re
 import base64
-from functools import wraps
+from app.routes.auth import auth_required
 from supabase import Client, create_client
 
 user_bp = Blueprint('user', __name__)
 
 UUID_REGEX = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I)
-
-def require_auth(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        auth_header = request.headers.get('Authorization')
-        if not auth_header:
-            return jsonify({"error": "Authorization header is required"}), 401
-        
-        try:
-            token = auth_header.replace('Bearer ', '')
-            supabase: Client = current_app.supabase
-            user_session_data = supabase.auth.get_user(token) 
-            if not user_session_data or not user_session_data.user: 
-                return jsonify({"error": "Invalid or expired token"}), 401
-            
-            request.user = user_session_data 
-            request.auth_token = token  # Store token for RLS
-        except Exception as e:
-            return jsonify({"error": "Token verification failed", "details": str(e)}), 401
-        
-        return f(*args, **kwargs)
-    return decorated
-
-def get_authenticated_supabase():
-    """Get Supabase client with proper authentication for RLS"""
-    token = getattr(request, 'auth_token', None)
-    if token:
-        authenticated_supabase = create_client(
-            current_app.config['SUPABASE_URL'],
-            current_app.config['SUPABASE_KEY']
-        )
-        authenticated_supabase.postgrest.auth(token)
-        return authenticated_supabase
-    return current_app.supabase
 
 def get_service_role_supabase():
     """Get Supabase client with service role for storage operations"""
@@ -191,7 +157,7 @@ def _upload_profile_image(user_id, image_data):
         raise Exception(f"Image upload failed: {str(e)}")
 
 @user_bp.route('/user', methods=['GET'])
-@require_auth
+@auth_required
 def get_user():
     user_id = request.args.get('userId')
     if not user_id: 
@@ -203,7 +169,7 @@ def get_user():
         return jsonify({"error": str(e)}), 400
     
     try:
-        supabase = get_authenticated_supabase()
+        supabase = current_app.supabase
         response = supabase.table('user').select('*').eq('user_id', user_id).execute()
         
         if not response.data:
@@ -227,7 +193,7 @@ def get_user():
         return jsonify({"error": "Failed to fetch user data", "details": str(e)}), 500
 
 @user_bp.route('/user/profile', methods=['GET'])
-@require_auth
+@auth_required
 def get_user_profile():
     user_id = request.args.get('userId')
     if not user_id: 
@@ -238,19 +204,15 @@ def get_user_profile():
     except ValueError as e: 
         return jsonify({"error": str(e)}), 400
     
-    authenticated_user_id = None
-    if hasattr(request, 'user') and hasattr(request.user, 'user') and hasattr(request.user.user, 'id'):
-        authenticated_user_id = request.user.user.id
-    else:
-        return jsonify({"error": "Authentication context error"}), 500
+    authenticated_user_id = g.user.id
     
     test_user_ids = ['user123', 'test-user', 'demo-user']
     if user_id not in test_user_ids and authenticated_user_id != user_id:
         return jsonify({"error": "Unauthorized: User ID mismatch"}), 403
     
     try:
-        supabase = get_authenticated_supabase()
-        auth_user_obj = request.user.user
+        supabase = current_app.supabase
+        auth_user_obj = g.user
         display_name, profile_image_url, phone = "User", None, None
         email = getattr(auth_user_obj, 'email', '')
         
@@ -298,7 +260,7 @@ def get_user_profile():
         return jsonify({"error": "Failed to fetch user profile", "details": str(e)}), 500
 
 @user_bp.route('/user/profile', methods=['PUT'])
-@require_auth
+@auth_required
 def update_user_profile():
     user_id_param = request.args.get('userId')
     if not user_id_param: 
@@ -309,11 +271,7 @@ def update_user_profile():
     except ValueError as e: 
         return jsonify({"error": str(e)}), 400
     
-    authenticated_user_id = None
-    if hasattr(request, 'user') and hasattr(request.user, 'user') and hasattr(request.user.user, 'id'):
-        authenticated_user_id = request.user.user.id
-    else:
-        return jsonify({"error": "Authentication context error"}), 500
+    authenticated_user_id = g.user.id
 
     test_user_ids = ['user123', 'test-user', 'demo-user']
     if user_id_param not in test_user_ids and authenticated_user_id != user_id_param:
@@ -325,7 +283,7 @@ def update_user_profile():
             return jsonify({"error": "Request body is required"}), 400
         
         # Get authenticated Supabase client for RLS
-        supabase = get_authenticated_supabase()
+        supabase = current_app.supabase
         
         update_payload = {}
         
@@ -429,7 +387,7 @@ def update_user_profile():
         return jsonify({"error": "Failed to update user profile", "details": str(e)}), 500
 
 @user_bp.route('/user/mood/calendar', methods=['GET'])
-@require_auth
+@auth_required
 def get_mood_calendar():
     user_id = request.args.get('userId')
     if not user_id: 
@@ -440,11 +398,7 @@ def get_mood_calendar():
     except ValueError as e: 
         return jsonify({"error": str(e)}), 400
     
-    authenticated_user_id = None
-    if hasattr(request, 'user') and hasattr(request.user, 'user') and hasattr(request.user.user, 'id'):
-        authenticated_user_id = request.user.user.id
-    else:
-        return jsonify({"error": "Authentication context error"}), 500
+    authenticated_user_id = g.user.id
     
     test_user_ids = ['user123', 'test-user', 'demo-user']
     if user_id not in test_user_ids and authenticated_user_id != user_id:
@@ -454,7 +408,7 @@ def get_mood_calendar():
     limit_str = request.args.get('limit', '50')
     
     try:
-        supabase = get_authenticated_supabase()
+        supabase = current_app.supabase
         query = supabase.table('mood_entries').select('mood_id, mood, created_at, analysis').eq('user_id', user_id).order('created_at', desc=True)
         
         if start_date_str: 
@@ -510,7 +464,7 @@ def get_mood_calendar():
         return jsonify({"error": "Failed to fetch mood calendar", "details": str(e)}), 500
 
 @user_bp.route('/user/homepage', methods=['GET'])
-@require_auth
+@auth_required
 def get_homepage_data():
     user_id = request.args.get('userId')
     if not user_id: 
@@ -521,11 +475,7 @@ def get_homepage_data():
     except ValueError as e: 
         return jsonify({"error": str(e)}), 400
     
-    authenticated_user_id = None
-    if hasattr(request, 'user') and hasattr(request.user, 'user') and hasattr(request.user.user, 'id'):
-        authenticated_user_id = request.user.user.id
-    else:
-        return jsonify({"error": "Authentication context error"}), 500
+    authenticated_user_id = g.user.id
     
     test_user_ids = ['user123', 'test-user', 'demo-user']
     if user_id not in test_user_ids and authenticated_user_id != user_id:
@@ -534,8 +484,8 @@ def get_homepage_data():
     days_back_str = request.args.get('days', '30')
     
     try:
-        supabase = get_authenticated_supabase()
-        auth_user_obj = request.user.user
+        supabase = current_app.supabase
+        auth_user_obj = g.user
         display_name, profile_image_url = "User", None
         
         try:
