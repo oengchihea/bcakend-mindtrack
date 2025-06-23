@@ -14,10 +14,7 @@ def get_service_role_supabase():
     """Get Supabase client with service role for storage operations"""
     service_role_key = current_app.config.get('SUPABASE_SERVICE_ROLE_KEY')
     if service_role_key:
-        return create_client(
-            current_app.config['SUPABASE_URL'],
-            service_role_key
-        )
+        return create_client(current_app.config['SUPABASE_URL'], service_role_key)
     return current_app.supabase
 
 def mood_to_emoji(mood, analysis=None):

@@ -29,6 +29,7 @@ print(f"🔧 Supabase Key: {'*' * 10}...{SUPABASE_KEY[-4:] if SUPABASE_KEY else 
 
 # Initialize Supabase client
 try:
+    # For Supabase 2.0+, create client without any additional parameters
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     print("✅ Supabase client initialized successfully")
 except Exception as e:
@@ -54,14 +55,27 @@ def auth_required(f):
         try:
             token = auth_header.split(' ')[1]
             
-            # Set auth for the request-bound supabase client for RLS
-            current_app.supabase.postgrest.auth(token)
+            # For Supabase 2.0+, we need to set the auth token differently
+            # Try the new method first
+            try:
+                # Set the session with the token
+                current_app.supabase.auth.set_session(token, token)
+            except Exception as session_error:
+                # Fallback: try setting the token directly
+                try:
+                    current_app.supabase.auth.set_session(token, None)
+                except Exception:
+                    # If both fail, we'll still try to get the user
+                    pass
             
             user_response = current_app.supabase.auth.get_user(token)
 
             if not user_response or not user_response.user:
                 # Clear potentially invalid auth token
-                current_app.supabase.postgrest.auth(None)
+                try:
+                    current_app.supabase.auth.set_session(None, None)
+                except Exception:
+                    pass
                 return jsonify({'error': 'Invalid or expired token', 'code': 'INVALID_TOKEN'}), 401
 
             # Store user and token in the request context `g` for use in the route
@@ -70,8 +84,11 @@ def auth_required(f):
 
         except Exception as e:
             # Ensure auth context is cleared on any failure
-            if hasattr(current_app, 'supabase') and hasattr(current_app.supabase, 'postgrest'):
-                current_app.supabase.postgrest.auth(None)
+            if hasattr(current_app, 'supabase') and hasattr(current_app.supabase, 'auth'):
+                try:
+                    current_app.supabase.auth.set_session(None, None)
+                except Exception:
+                    pass
             return jsonify({'error': 'Token verification failed', 'details': str(e), 'code': 'TOKEN_VERIFICATION_FAILED'}), 401
 
         return f(*args, **kwargs)

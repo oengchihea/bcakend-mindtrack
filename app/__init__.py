@@ -27,6 +27,7 @@ def create_app():
         app.supabase = None
     else:
         try:
+            # Initialize Supabase client for version 2.0+
             app.supabase = create_client(app.config['SUPABASE_URL'], app.config['SUPABASE_KEY'])
             logging.info("Supabase client initialized successfully with service key.")
         except Exception as e:
