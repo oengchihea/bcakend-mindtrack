@@ -6,6 +6,30 @@ from app.middleware.spam_middleware import spam_protection
 from app.services.auto_spam_detector_service import spam_detector
 posts_bp = Blueprint('posts', __name__)
 
+# Debug route to test if posts blueprint is working
+@posts_bp.route('/posts/debug', methods=['GET'])
+def posts_debug():
+    """Debug endpoint to test if posts blueprint is accessible"""
+    return jsonify({
+        'message': 'Posts blueprint is working',
+        'available_routes': [
+            '/api/posts/',
+            '/api/posts',
+            '/api/posts/debug',
+            '/api/posts/health'
+        ]
+    }), 200
+
+# Simple posts route without auth for testing
+@posts_bp.route('/posts/test', methods=['GET'])
+def posts_test():
+    """Simple test endpoint for posts without authentication"""
+    return jsonify({
+        'message': 'Posts endpoint is accessible',
+        'posts': [],
+        'count': 0
+    }), 200
+
 # ============================================================================
 # USER LIMITS ENDPOINT
 # ============================================================================
@@ -99,6 +123,7 @@ def create_post():
         print(f"Error creating post: {e}")
         return jsonify({'error': str(e)}), 500
 
+@posts_bp.route('/posts/', methods=['GET'])
 @posts_bp.route('/posts', methods=['GET'])
 @auth_required
 def get_all_posts():

@@ -15,8 +15,8 @@ def get_service_role_supabase():
     service_role_key = current_app.config.get('SUPABASE_SERVICE_ROLE_KEY')
     if service_role_key:
         return create_client(
-            current_app.config['SUPABASE_URL'],
-            service_role_key
+            supabase_url=current_app.config['SUPABASE_URL'],
+            supabase_key=service_role_key
         )
     return current_app.supabase
 

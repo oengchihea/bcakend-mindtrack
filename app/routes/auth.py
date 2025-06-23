@@ -29,7 +29,11 @@ print(f"🔧 Supabase Key: {'*' * 10}...{SUPABASE_KEY[-4:] if SUPABASE_KEY else 
 
 # Initialize Supabase client
 try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    # For Supabase 2.0+, create client with explicit parameters
+    supabase: Client = create_client(
+        supabase_url=SUPABASE_URL,
+        supabase_key=SUPABASE_KEY
+    )
     print("✅ Supabase client initialized successfully")
 except Exception as e:
     print(f"❌ Failed to initialize Supabase client: {e}")
@@ -71,8 +75,7 @@ def auth_required(f):
 
             if not user_response or not user_response.user:
                 # Clear potentially invalid auth token
-                supabase_client.postgrest.auth(None)
-                logger.warning("Authentication failed: Invalid or expired token")
+                current_app.supabase.postgrest.auth(None)
                 return jsonify({'error': 'Invalid or expired token', 'code': 'INVALID_TOKEN'}), 401
 
             # Store user and token in the request context `g` for use in the route
@@ -82,9 +85,8 @@ def auth_required(f):
 
         except Exception as e:
             # Ensure auth context is cleared on any failure
-            if hasattr(supabase_client, 'postgrest'):
-                supabase_client.postgrest.auth(None)
-            logger.error(f"Token verification failed: {e}", exc_info=True)
+            if hasattr(current_app, 'supabase') and hasattr(current_app.supabase, 'postgrest'):
+                current_app.supabase.postgrest.auth(None)
             return jsonify({'error': 'Token verification failed', 'details': str(e), 'code': 'TOKEN_VERIFICATION_FAILED'}), 401
 
         return f(*args, **kwargs)
@@ -156,7 +158,10 @@ def change_password():
                 return jsonify({"error": "Failed to get valid session"}), 500
             
             # Create a new client with the fresh session token
-            session_supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            session_supabase = create_client(
+                supabase_url=SUPABASE_URL,
+                supabase_key=SUPABASE_KEY
+            )
             
             # Set the auth token from the fresh session
             session_supabase.auth.set_session(session.access_token, session.refresh_token)
@@ -467,7 +472,10 @@ def logout():
                 logger.info("🔄 Attempting Supabase logout method 1...")
                 
                 # Create a new supabase client instance for this logout
-                temp_supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+                temp_supabase = create_client(
+                    supabase_url=SUPABASE_URL,
+                    supabase_key=SUPABASE_KEY
+                )
                 
                 # Try to set session and logout
                 try:

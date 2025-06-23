@@ -6,7 +6,7 @@ import uuid
 # Blueprint
 events_bp = Blueprint('events', __name__, url_prefix='/api/events')
 
-# Auth decorator for Supabase
+# Auth decorator for Supabase 2.0+
 def auth_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -22,7 +22,14 @@ def auth_required(f):
 
             g.current_user = user.user
             g.access_token = token
-            current_app.supabase.postgrest.auth(token)
+            
+            # For Supabase 2.0+, set the session instead of using postgrest.auth
+            try:
+                current_app.supabase.auth.set_session(token, token)
+            except Exception:
+                # Fallback if session setting fails
+                pass
+                
         except Exception as e:
             print(f"Authentication error: {str(e)}")  # Debug
             return jsonify({'error': 'Authentication failed'}), 401

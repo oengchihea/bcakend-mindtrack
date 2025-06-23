@@ -20,7 +20,10 @@ def get_service_client():
         return None
     try:
         url = current_app.config['SUPABASE_URL']
-        return create_client(url, service_key)
+        return create_client(
+            supabase_url=url,
+            supabase_key=service_key
+        )
     except Exception as e:
         current_app.logger.error(f"Failed to create service client: {e}")
         return None
