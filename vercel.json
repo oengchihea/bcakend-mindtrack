@@ -5,7 +5,7 @@
       "src": "run.py",
       "use": "@vercel/python",
       "config": {
-        "wsgi": "app"
+        "wsgi": "run:app"
       }
     }
   ],
