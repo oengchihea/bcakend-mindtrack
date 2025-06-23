@@ -4,16 +4,10 @@
     {
       "src": "run.py",
       "use": "@vercel/python",
-      "config": {
-        "wsgi": "run:app"
-      }
+      "config": { "maxLambdaSize": "15mb", "runtime": "python3.9" }
     }
   ],
   "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "run.py"
-    },
     {
       "src": "/(.*)",
       "dest": "run.py"
