@@ -80,42 +80,30 @@ def create_app():
     except ImportError as e:
         logging.error(f"CRITICAL ERROR: Failed to import or register blueprint: {e}", exc_info=True)
 
+    # --- Health Check and Root Routes ---
+    @app.route('/')
+    def root():
+        if hasattr(app, 'supabase') and app.supabase:
+            return "Flask backend is running. Supabase client appears to be initialized."
+        else:
+            return "Flask backend is running. Supabase client FAILED to initialize (check logs)."
+
+    @app.route('/api/health')
+    def health_check():
+        supabase_status = "OK"
+        if not hasattr(app, 'supabase') or not app.supabase:
+            supabase_status = "Error: Supabase client not initialized"
+        
+        blueprints_registered = list(app.blueprints.keys())
+
+        return jsonify({
+            "status": "healthy",
+            "supabase_client": supabase_status,
+            "registered_blueprints": blueprints_registered if blueprints_registered else "None"
+        }), 200
+
     logging.info("--- Flask app creation finished ---")
     return app
 
-# This should be the entry point Vercel uses.
-app = create_app()
-
-# --- Health Check and Root Routes ---
-@app.route('/')
-def root():
-    if hasattr(app, 'supabase') and app.supabase:
-        return "Flask backend is running. Supabase client appears to be initialized."
-    else:
-        return "Flask backend is running. Supabase client FAILED to initialize (check logs)."
-
-@app.route('/api/health')
-def health_check():
-    supabase_status = "OK"
-    if not hasattr(app, 'supabase') or not app.supabase:
-        supabase_status = "Error: Supabase client not initialized"
-    
-    blueprints_registered = []
-    if 'journal' in app.blueprints:
-        blueprints_registered.append("journal_bp")
-    if 'mood' in app.blueprints:
-        blueprints_registered.append("mood_bp")
-    if 'auth' in app.blueprints:
-        blueprints_registered.append("auth_bp")
-    if 'user' in app.blueprints:
-        blueprints_registered.append("user_bp")
-    if 'posts' in app.blueprints:
-        blueprints_registered.append("posts_bp")
-    if 'analyze' in app.blueprints:
-        blueprints_registered.append("analyze_bp")
-
-    return jsonify({
-        "status": "healthy",
-        "supabase_client": supabase_status,
-        "registered_blueprints": blueprints_registered if blueprints_registered else "None or check failed"
-    }), 200
+# The app object is now created in `run.py` to have a single entrypoint.
+# The health checks are moved inside create_app.

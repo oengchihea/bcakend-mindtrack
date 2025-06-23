@@ -2,17 +2,21 @@
   "version": 2,
   "builds": [
     {
-      "src": "app/__init__.py",
+      "src": "run.py",
       "use": "@vercel/python",
       "config": {
-        "wsgi": "app.app"
+        "wsgi": "app"
       }
     }
   ],
   "routes": [
     {
+      "src": "/api/(.*)",
+      "dest": "run.py"
+    },
+    {
       "src": "/(.*)",
-      "dest": "app/__init__.py"
+      "dest": "run.py"
     }
   ]
 }
