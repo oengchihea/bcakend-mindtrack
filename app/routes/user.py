@@ -190,7 +190,7 @@ def _upload_profile_image(user_id, image_data):
     except Exception as e:
         raise Exception(f"Image upload failed: {str(e)}")
 
-@user_bp.route('/api/user', methods=['GET'])
+@user_bp.route('/user', methods=['GET'])
 @require_auth
 def get_user():
     user_id = request.args.get('userId')
@@ -226,7 +226,7 @@ def get_user():
     except Exception as e:
         return jsonify({"error": "Failed to fetch user data", "details": str(e)}), 500
 
-@user_bp.route('/api/user/profile', methods=['GET'])
+@user_bp.route('/user/profile', methods=['GET'])
 @require_auth
 def get_user_profile():
     user_id = request.args.get('userId')
@@ -297,7 +297,7 @@ def get_user_profile():
     except Exception as e:
         return jsonify({"error": "Failed to fetch user profile", "details": str(e)}), 500
 
-@user_bp.route('/api/user/profile', methods=['PUT'])
+@user_bp.route('/user/profile', methods=['PUT'])
 @require_auth
 def update_user_profile():
     user_id_param = request.args.get('userId')
@@ -428,7 +428,7 @@ def update_user_profile():
     except Exception as e:
         return jsonify({"error": "Failed to update user profile", "details": str(e)}), 500
 
-@user_bp.route('/api/user/mood/calendar', methods=['GET'])
+@user_bp.route('/user/mood/calendar', methods=['GET'])
 @require_auth
 def get_mood_calendar():
     user_id = request.args.get('userId')
@@ -509,7 +509,7 @@ def get_mood_calendar():
     except Exception as e:
         return jsonify({"error": "Failed to fetch mood calendar", "details": str(e)}), 500
 
-@user_bp.route('/api/user/homepage', methods=['GET'])
+@user_bp.route('/user/homepage', methods=['GET'])
 @require_auth
 def get_homepage_data():
     user_id = request.args.get('userId')

@@ -4,7 +4,7 @@ import uuid
 from functools import wraps
 from app.middleware.spam_middleware import spam_protection
 from app.services.auto_spam_detector_service import spam_detector
-posts_bp = Blueprint('posts', __name__, url_prefix='/api/posts')
+posts_bp = Blueprint('posts', __name__)
 
 def auth_required(f):
     """Decorator to require authentication for routes"""

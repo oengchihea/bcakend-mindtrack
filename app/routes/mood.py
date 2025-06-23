@@ -8,7 +8,7 @@ import time
 from typing import Dict, Any, Optional, List
 import os
 
-mood_bp = Blueprint('mood', __name__, url_prefix='/api')
+mood_bp = Blueprint('mood', __name__)
 
 # UUID validation regex
 uuid_regex = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)

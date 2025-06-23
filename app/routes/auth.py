@@ -67,7 +67,7 @@ def verify_token(f):
 
     return decorated_function
 
-@auth_bp.route('/api/change-password', methods=['POST'])
+@auth_bp.route('/change-password', methods=['POST'])
 @verify_token
 def change_password():
     """Change user password with current password verification"""
@@ -166,7 +166,7 @@ def change_password():
             "details": str(e)
         }), 500
 
-@auth_bp.route('/api/signup', methods=['POST'])
+@auth_bp.route('/signup', methods=['POST'])
 def api_signup():
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
@@ -228,7 +228,7 @@ def api_signup():
             "details": str(e)
         }), 400
 
-@auth_bp.route('/api/verify-otp', methods=['POST'])
+@auth_bp.route('/verify-otp', methods=['POST'])
 def verify_otp():
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
@@ -266,7 +266,7 @@ def verify_otp():
             "details": str(e)
         }), 400
 
-@auth_bp.route('/api/login', methods=['POST'])
+@auth_bp.route('/login', methods=['POST'])
 def login():
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
@@ -335,7 +335,7 @@ def login():
             return jsonify({"error": "Please verify your email first"}), 403
         return jsonify({"error": f"Login failed: {error_msg}"}), 400
 
-@auth_bp.route('/api/reset-password', methods=['POST'])
+@auth_bp.route('/reset-password', methods=['POST'])
 def reset_password():
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
@@ -416,7 +416,7 @@ def extract_user_from_token(access_token):
         logger.warning(f"Could not decode token: {e}")
         return None
 
-@auth_bp.route('/api/logout', methods=['POST'])
+@auth_bp.route('/logout', methods=['POST'])
 def logout():
     """Robust logout endpoint that handles various scenarios"""
     try:
@@ -505,7 +505,7 @@ def logout():
             'timestamp': datetime.utcnow().isoformat()
         }), 200
 
-@auth_bp.route('/api/verify-token-status', methods=['GET'])
+@auth_bp.route('/verify-token-status', methods=['GET'])
 def verify_token_status():
     """Verify if a token is valid"""
     try:
@@ -534,7 +534,7 @@ def verify_token_status():
         logger.error(f"Token verification error: {e}")
         return jsonify({'valid': False, 'error': str(e)}), 401
 
-@auth_bp.route('/api/test-verify-token', methods=['GET'])
+@auth_bp.route('/test-verify-token', methods=['GET'])
 @verify_token
 def test_verify_token():
     """Test endpoint to verify if token verification is working"""
@@ -545,7 +545,7 @@ def test_verify_token():
         "email": user.email
     }), 200
 
-@auth_bp.route('/api/refresh-token', methods=['POST'])
+@auth_bp.route('/refresh-token', methods=['POST'])
 def refresh_token():
     """Refresh access token using refresh token"""
     if not request.is_json:
