@@ -75,8 +75,16 @@ def handle_journal_entries():
     if request.method == 'GET':
         try:
             res = client.table("journalEntry").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
-            current_app.logger.info(f"Successfully fetched {len(res.data)} entries for user {user_id} at %s", datetime.now(timezone.utc).isoformat())
-            return jsonify(res.data or []), 200
+            
+            # Add a version marker to each entry to confirm deployment
+            modified_data = []
+            if res.data:
+                for entry in res.data:
+                    entry['backend_version'] = 'v1.4-final-test'
+                    modified_data.append(entry)
+
+            current_app.logger.info(f"Successfully fetched {len(modified_data)} entries for user {user_id} at %s", datetime.now(timezone.utc).isoformat())
+            return jsonify(modified_data or []), 200
         except APIError as e:
             current_app.logger.error(f"Supabase API Error on GET: {e.message} at %s", datetime.now(timezone.utc).isoformat(), exc_info=True)
             return jsonify({"error": f"Database error: {e.message}"}), 500
