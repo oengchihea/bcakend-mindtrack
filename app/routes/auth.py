@@ -47,31 +47,44 @@ def auth_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         from flask import current_app
+        logger.info(f"Auth required: Checking supabase client - current_app.supabase: {current_app.supabase}, global supabase: {supabase}")
+        
+        # Use global supabase as fallback if current_app.supabase is None
+        supabase_client = current_app.supabase if hasattr(current_app, 'supabase') and current_app.supabase else supabase
+        
+        if not supabase_client:
+            logger.error("Authentication failed: No Supabase client available")
+            return jsonify({'error': 'Internal server error: No Supabase client', 'code': 'NO_SUPABASE'}), 500
+
         auth_header = request.headers.get('Authorization')
         if not auth_header or not auth_header.startswith('Bearer '):
+            logger.warning("Authentication failed: No or invalid Authorization header")
             return jsonify({'error': 'Authorization header is required', 'code': 'AUTH_HEADER_MISSING'}), 401
 
         try:
             token = auth_header.split(' ')[1]
             
             # Set auth for the request-bound supabase client for RLS
-            current_app.supabase.postgrest.auth(token)
+            supabase_client.postgrest.auth(token)
             
-            user_response = current_app.supabase.auth.get_user(token)
+            user_response = supabase_client.auth.get_user(token)
 
             if not user_response or not user_response.user:
                 # Clear potentially invalid auth token
-                current_app.supabase.postgrest.auth(None)
+                supabase_client.postgrest.auth(None)
+                logger.warning("Authentication failed: Invalid or expired token")
                 return jsonify({'error': 'Invalid or expired token', 'code': 'INVALID_TOKEN'}), 401
 
             # Store user and token in the request context `g` for use in the route
             g.user = user_response.user
             g.token = token
+            logger.info(f"Authentication successful for user {g.user.id}")
 
         except Exception as e:
             # Ensure auth context is cleared on any failure
-            if hasattr(current_app, 'supabase') and hasattr(current_app.supabase, 'postgrest'):
-                current_app.supabase.postgrest.auth(None)
+            if hasattr(supabase_client, 'postgrest'):
+                supabase_client.postgrest.auth(None)
+            logger.error(f"Token verification failed: {e}", exc_info=True)
             return jsonify({'error': 'Token verification failed', 'details': str(e), 'code': 'TOKEN_VERIFICATION_FAILED'}), 401
 
         return f(*args, **kwargs)
@@ -581,8 +594,6 @@ def refresh_token():
             
     except Exception as e:
         return jsonify({"error": f"Token refresh failed: {str(e)}"}), 401
-
-
 
 # Health check endpoint
 @auth_bp.route('/health', methods=['GET'])

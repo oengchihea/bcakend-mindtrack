@@ -1,6 +1,6 @@
 import logging
 import os
-from flask import Flask, jsonify
+from flask import Flask, jsonify, current_app
 from flask_cors import CORS
 from supabase import create_client
 from dotenv import load_dotenv
@@ -21,17 +21,23 @@ def create_app():
 
     logging.info(f"SUPABASE_URL Loaded: {'YES' if app.config['SUPABASE_URL'] else 'NO - CRITICAL'}")
     logging.info(f"SUPABASE_KEY Loaded: {'YES' if app.config['SUPABASE_KEY'] else 'NO - CRITICAL'}")
-    
-    if not all([app.config['SUPABASE_URL'], app.config['SUPABASE_KEY']]):
-        logging.error("CRITICAL ERROR: Missing Supabase URL or Key in environment variables.")
-        app.supabase = None
-    else:
-        try:
-            app.supabase = create_client(app.config['SUPABASE_URL'], app.config['SUPABASE_KEY'])
-            logging.info("Supabase client initialized successfully with service key.")
-        except Exception as e:
-            logging.error(f"CRITICAL ERROR: Failed to initialize Supabase client with service key: {e}", exc_info=True)
+
+    # Initialize Supabase client within application context
+    with app.app_context():
+        if not all([app.config['SUPABASE_URL'], app.config['SUPABASE_KEY']]):
+            logging.error("CRITICAL ERROR: Missing Supabase URL or Key in environment variables.")
             app.supabase = None
+            current_app.config['SUPABASE_CLIENT'] = None
+        else:
+            try:
+                supabase_client = create_client(app.config['SUPABASE_URL'], app.config['SUPABASE_KEY'])
+                app.supabase = supabase_client
+                current_app.config['SUPABASE_CLIENT'] = supabase_client
+                logging.info("Supabase client initialized successfully with service key and stored in config.")
+            except Exception as e:
+                logging.error(f"CRITICAL ERROR: Failed to initialize Supabase client with service key: {e}", exc_info=True)
+                app.supabase = None
+                current_app.config['SUPABASE_CLIENT'] = None
 
     # --- CORS and Blueprint Registration ---
     CORS(app, resources={r"/api/*": {"origins": "*"}})

@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify, current_app, g
 import uuid
 import re
 import requests
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 import json
 import time
 from typing import Dict, Any, Optional, List
@@ -36,7 +36,6 @@ class MoodAnalyzer:
     """Enhanced mood analysis class with Gemini AI-first approach"""
     
     def __init__(self):
-        # UPDATED: Use the correct base URL and endpoint
         self.ai_base_url = "https://ai-mindtrack.vercel.app"
         self.ai_api_url = f"{self.ai_base_url}/api/analyze-data"
         self.ai_api_key = os.getenv('AI_SERVICE_API_KEY', '')
@@ -45,10 +44,8 @@ class MoodAnalyzer:
         self.use_ai_first = True
     
     def analyze_mood(self, content: str, questionnaire_data: Dict[str, Any]) -> Dict[str, Any]:
-        """ENHANCED: Gemini AI-first analysis method"""
         print(f'🧠 Starting GEMINI AI mood analysis for content length: {len(content)}')
         
-        # Try Gemini AI analysis with multiple attempts
         for attempt in range(self.max_retries):
             print(f'🤖 Gemini AI Analysis attempt {attempt + 1}/{self.max_retries}')
             ai_result = self._call_gemini_ai_api(content, questionnaire_data)
@@ -61,9 +58,8 @@ class MoodAnalyzer:
             
             if attempt < self.max_retries - 1:
                 print(f'⚠️ Gemini AI attempt {attempt + 1} failed, retrying...')
-                time.sleep(2 ** attempt)  # Exponential backoff
+                time.sleep(2 ** attempt)
         
-        # Fallback to local analysis if Gemini AI fails
         print('❌ Gemini AI analysis failed after all attempts, using enhanced local analysis as last resort')
         local_result = self._create_local_analysis(content, questionnaire_data)
         local_result['ai_failed'] = True
@@ -71,24 +67,20 @@ class MoodAnalyzer:
         return local_result
     
     def _call_gemini_ai_api(self, content: str, questionnaire_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Call Gemini AI analyze-data API with correct format"""
         try:
-            # Extract questionnaire responses for the API format
             mood_scale = self._extract_mood_scale(questionnaire_data)
             mood_word = self._extract_mood_word(questionnaire_data)
             positive_experience = self._extract_positive_experience(questionnaire_data)
             affecting_factor = self._extract_concerns(questionnaire_data)
         
-            # Create userData object matching the API specification
             user_data = {
-                "feeling": str(mood_scale),  # 1-10 scale as string
+                "feeling": str(mood_scale),
                 "moodWord": mood_word or "neutral",
                 "positiveExperience": positive_experience or "",
                 "affectingFactor": affecting_factor or "",
                 "responseStyle": "Use 'you' language - speak directly to the user in second person"
             }
         
-            # Create payload matching the API specification
             payload = {
                 "userData": user_data,
                 "analysisType": "immediate-mood"
@@ -100,7 +92,6 @@ class MoodAnalyzer:
                 'Accept': 'application/json'
             }
         
-            # Add API key if available
             if self.ai_api_key:
                 headers['Authorization'] = f'Bearer {self.ai_api_key}'
                 headers['X-API-Key'] = self.ai_api_key
@@ -122,7 +113,6 @@ class MoodAnalyzer:
                 result = response.json()
                 print(f'✅ Gemini AI success: {list(result.keys())}')
             
-                # Transform Gemini AI response to our format
                 transformed_result = self._transform_gemini_response(result)
                 return transformed_result
             else:
@@ -141,7 +131,6 @@ class MoodAnalyzer:
     
     def _create_comprehensive_prompt(self, content: str, mood_scale: int, mood_word: str, 
                                    positive_experience: str, concerns: str) -> str:
-        """Create comprehensive prompt for Gemini AI analysis"""
         prompt = f"""
 You are an empathetic AI mood analyzer. Analyze this mood journal entry and provide a structured JSON response.
 
@@ -171,7 +160,6 @@ Be empathetic, supportive, and provide actionable suggestions.
         return prompt
     
     def _extract_mood_scale(self, questionnaire_data: Dict[str, Any]) -> int:
-        """Extract mood scale (1-10) from questionnaire"""
         if not questionnaire_data or 'questionnaire_responses' not in questionnaire_data:
             return 5
         
@@ -179,14 +167,13 @@ Be empathetic, supportive, and provide actionable suggestions.
             if response['question_id'] == 'feeling_scale':
                 try:
                     scale = int(float(response['user_response']))
-                    return max(1, min(10, scale))  # Ensure 1-10 range
+                    return max(1, min(10, scale))
                 except (ValueError, TypeError):
                     pass
         
-        return 5  # Default neutral
+        return 5
     
     def _extract_mood_word(self, questionnaire_data: Dict[str, Any]) -> str:
-        """Extract mood word from questionnaire"""
         if not questionnaire_data or 'questionnaire_responses' not in questionnaire_data:
             return ""
         
@@ -197,7 +184,6 @@ Be empathetic, supportive, and provide actionable suggestions.
         return ""
     
     def _extract_positive_experience(self, questionnaire_data: Dict[str, Any]) -> str:
-        """Extract positive experience from questionnaire"""
         if not questionnaire_data or 'questionnaire_responses' not in questionnaire_data:
             return ""
         
@@ -208,7 +194,6 @@ Be empathetic, supportive, and provide actionable suggestions.
         return ""
     
     def _extract_concerns(self, questionnaire_data: Dict[str, Any]) -> str:
-        """Extract concerns/challenges from questionnaire"""
         if not questionnaire_data or 'questionnaire_responses' not in questionnaire_data:
             return ""
         
@@ -220,24 +205,19 @@ Be empathetic, supportive, and provide actionable suggestions.
         return "; ".join(concerns_list) if concerns_list else ""
     
     def _transform_gemini_response(self, gemini_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Transform Gemini AI response to our standard format"""
         try:
-            # The API returns { analysis: { score, emoji, insights } }
             if 'analysis' in gemini_result:
                 analysis_data = gemini_result['analysis']
             else:
                 analysis_data = gemini_result
         
-            # Extract fields from the API response
-            score = analysis_data.get('score', 3)  # API returns 1-5 scale
+            score = analysis_data.get('score', 3)
             emoji_text = analysis_data.get('emoji', 'neutral')
             insights = analysis_data.get('insights', '')
         
-            # Convert 1-5 scale to 0-10 scale for our system
-            converted_score = ((score - 1) / 4) * 10  # Convert 1-5 to 0-10
+            converted_score = ((score - 1) / 4) * 10
             converted_score = max(0.0, min(10.0, converted_score))
         
-            # Convert emoji text to actual emoji
             emoji_map = {
                 'sad': '😢',
                 'slightly_sad': '😔',
@@ -247,18 +227,14 @@ Be empathetic, supportive, and provide actionable suggestions.
             }
             emoji = emoji_map.get(emoji_text, '😐')
         
-            # Generate sentiment from converted score
             sentiment = self._get_sentiment_from_score(converted_score)
         
-            # Generate additional fields that our system expects
             suggestions = self._generate_suggestions(converted_score, {})
-            themes = ['mood_analysis']  # Default theme
+            themes = ['mood_analysis']
         
-            # Ensure insights is meaningful and in second person
             if not insights or len(insights.strip()) < 20:
                 insights = self._generate_insights(converted_score, '', {})
             else:
-                # Convert third person to second person
                 insights = self._convert_to_second_person(insights)
         
             transformed = {
@@ -266,16 +242,16 @@ Be empathetic, supportive, and provide actionable suggestions.
                 'emoji': emoji,
                 'sentiment': sentiment,
                 'insights': insights,
-                'suggestions': suggestions[:4],  # Limit to 4 suggestions
+                'suggestions': suggestions[:4],
                 'themes': themes,
-                'confidence': 0.95,  # High confidence since it's from Gemini
+                'confidence': 0.95,
                 'mood_category': self._get_mood_category_from_score(converted_score),
                 'intensity': self._get_intensity_from_score(converted_score),
                 'source': 'gemini-ai-api',
                 'timestamp': datetime.utcnow().isoformat(),
                 'original_response': gemini_result,
-                'api_score': score,  # Keep original 1-5 score for reference
-                'api_emoji': emoji_text  # Keep original emoji text
+                'api_score': score,
+                'api_emoji': emoji_text
             }
         
             print(f'✅ Transformed Gemini response: API Score {score} -> Our Score {converted_score}, Sentiment {sentiment}')
@@ -287,19 +263,16 @@ Be empathetic, supportive, and provide actionable suggestions.
             return None
     
     def _is_valid_analysis(self, analysis: Dict[str, Any]) -> bool:
-        """Validate analysis response"""
         if not analysis:
             return False
         
         required_fields = ['score', 'sentiment', 'insights']
         
-        # Check required fields exist
         if not all(field in analysis for field in required_fields):
             missing = [f for f in required_fields if f not in analysis]
             print(f'❌ Analysis missing fields: {missing}')
             return False
         
-        # Validate score
         try:
             score = float(analysis['score'])
             if not 0 <= score <= 10:
@@ -309,7 +282,6 @@ Be empathetic, supportive, and provide actionable suggestions.
             print(f'❌ Score not numeric: {analysis["score"]}')
             return False
         
-        # Validate insights
         insights = analysis['insights']
         if not isinstance(insights, str) or len(insights.strip()) < 10:
             print(f'❌ Invalid insights: {insights}')
@@ -319,22 +291,14 @@ Be empathetic, supportive, and provide actionable suggestions.
         return True
     
     def _create_local_analysis(self, content: str, questionnaire_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Enhanced local analysis as fallback"""
         print('🔧 Creating FALLBACK local analysis (Gemini AI unavailable)')
         
-        # Extract base score from questionnaire
         base_score = self._extract_base_score(questionnaire_data)
-        
-        # Analyze content sentiment
         content_adjustment = self._analyze_content_sentiment(content)
-        
-        # Apply questionnaire adjustments
         questionnaire_adjustment = self._analyze_questionnaire_responses(questionnaire_data)
         
-        # Calculate final score
         final_score = max(0.0, min(10.0, base_score + content_adjustment + questionnaire_adjustment))
         
-        # Generate analysis components
         sentiment = self._get_sentiment_from_score(final_score)
         emoji = self._get_emoji_from_score(final_score)
         insights = self._generate_insights(final_score, content, questionnaire_data)
@@ -360,7 +324,6 @@ Be empathetic, supportive, and provide actionable suggestions.
         return analysis
     
     def _extract_base_score(self, questionnaire_data: Dict[str, Any]) -> float:
-        """Extract base score from questionnaire responses"""
         if not questionnaire_data or 'questionnaire_responses' not in questionnaire_data:
             return 5.0
         
@@ -374,7 +337,6 @@ Be empathetic, supportive, and provide actionable suggestions.
         return 5.0
     
     def _analyze_content_sentiment(self, content: str) -> float:
-        """Analyze content for sentiment keywords"""
         content_lower = content.lower()
         
         positive_words = {
@@ -402,7 +364,6 @@ Be empathetic, supportive, and provide actionable suggestions.
         return max(-3.0, min(3.0, adjustment))
     
     def _analyze_questionnaire_responses(self, questionnaire_data: Dict[str, Any]) -> float:
-        """Analyze questionnaire responses for additional scoring"""
         if not questionnaire_data or 'questionnaire_responses' not in questionnaire_data:
             return 0.0
         
@@ -437,7 +398,6 @@ Be empathetic, supportive, and provide actionable suggestions.
         return max(-2.0, min(2.0, adjustment))
     
     def _get_sentiment_from_score(self, score: float) -> str:
-        """Get sentiment label from score"""
         if score >= 8.5:
             return 'very positive'
         elif score >= 7.0:
@@ -454,7 +414,6 @@ Be empathetic, supportive, and provide actionable suggestions.
             return 'very negative'
     
     def _get_emoji_from_score(self, score: float) -> str:
-        """Get emoji from score"""
         if score >= 9.0:
             return '😄'
         elif score >= 7.5:
@@ -471,7 +430,6 @@ Be empathetic, supportive, and provide actionable suggestions.
             return '😢'
     
     def _get_mood_category_from_score(self, score: float) -> str:
-        """Get mood category from score"""
         if score >= 8.5:
             return 'joyful'
         elif score >= 7.0:
@@ -488,7 +446,6 @@ Be empathetic, supportive, and provide actionable suggestions.
             return 'very distressed'
     
     def _get_intensity_from_score(self, score: float) -> str:
-        """Get emotional intensity from score"""
         if score >= 8.5 or score <= 1.5:
             return 'high'
         elif score >= 6.5 or score <= 3.5:
@@ -497,7 +454,6 @@ Be empathetic, supportive, and provide actionable suggestions.
             return 'low'
     
     def _generate_insights(self, score: float, content: str, questionnaire_data: Dict[str, Any]) -> str:
-        """Generate personalized insights"""
         insights = f"Based on your responses, you're experiencing {self._get_sentiment_from_score(score)} emotions with a wellness score of {score}/10. "
         
         if score >= 8:
@@ -512,7 +468,6 @@ Be empathetic, supportive, and provide actionable suggestions.
         return insights
     
     def _generate_suggestions(self, score: float, questionnaire_data: Dict[str, Any]) -> List[str]:
-        """Generate score-appropriate suggestions"""
         if score >= 8:
             return [
                 "Continue the activities that are making you feel so positive",
@@ -543,7 +498,6 @@ Be empathetic, supportive, and provide actionable suggestions.
             ]
     
     def _extract_themes(self, content: str, questionnaire_data: Dict[str, Any]) -> List[str]:
-        """Extract themes from content and questionnaire"""
         themes = []
         content_lower = content.lower()
         
@@ -563,11 +517,9 @@ Be empathetic, supportive, and provide actionable suggestions.
         return themes[:3]
 
     def _convert_to_second_person(self, insights: str) -> str:
-        """Convert third person insights to second person"""
         if not insights:
             return insights
         
-        # Common third person to second person conversions
         conversions = [
             ("The user reports", "You reported"),
             ("The user describes", "You described"),
@@ -593,34 +545,37 @@ Be empathetic, supportive, and provide actionable suggestions.
         return converted_insights
 
 class MoodService:
-    """Enhanced mood service with strict daily limit checking"""
-    
     def __init__(self, supabase_client):
         self.supabase = supabase_client
         self.analyzer = MoodAnalyzer()
     
     def check_daily_mood_exists(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """Strict daily mood checking"""
-        today = date.today().isoformat()
-        
         try:
-            print(f'🔍 Checking daily mood for user {user_id} on {today}')
+            today_utc = datetime.now(timezone.utc).date()
+            start_of_day = datetime.combine(today_utc, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+            end_of_day = datetime.combine(today_utc, datetime.max.time(), tzinfo=timezone.utc).isoformat()
+            
+            print(f'🔍 Server UTC time: {datetime.now(timezone.utc).isoformat()}')
+            print(f'🔍 Checking daily mood for user {user_id} on {today_utc} (UTC)')
+            print(f'🔍 Query range: {start_of_day} to {end_of_day}')
             
             response = self.supabase.table('mood_entries')\
                 .select('mood_id, analysis, created_at, mood, content')\
                 .eq('user_id', user_id)\
-                .gte('created_at', f'{today}T00:00:00')\
-                .lt('created_at', f'{today}T23:59:59')\
+                .gte('created_at', start_of_day)\
+                .lte('created_at', end_of_day)\
                 .order('created_at', desc=True)\
                 .limit(1)\
                 .execute()
+            
+            print(f'🔍 Supabase response: {response.data}')
             
             if response.data and len(response.data) > 0:
                 entry = response.data[0]
                 print(f'✅ Found existing mood entry: {entry["mood_id"]} at {entry["created_at"]}')
                 return entry
             
-            print(f'✅ No mood entry found for today')
+            print(f'✅ No mood entry found for today ({today_utc})')
             return None
             
         except Exception as e:
@@ -628,18 +583,15 @@ class MoodService:
             return None
     
     def save_mood_entry(self, user_id: str, mood: str, content: str, questionnaire_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Save new mood entry with Gemini AI analysis"""
         try:
             print(f'💾 Starting mood entry save for user: {user_id}')
             
-            # Generate analysis with Gemini AI
             print('🧠 Starting Gemini AI mood analysis...')
             analysis_start = time.time()
             analysis = self.analyzer.analyze_mood(content, questionnaire_data)
             analysis_time = time.time() - analysis_start
             print(f'✅ Analysis completed in {analysis_time:.2f}s')
             
-            # Create mood entry
             mood_entry = {
                 'mood_id': str(uuid.uuid4()),
                 'user_id': user_id,
@@ -647,10 +599,9 @@ class MoodService:
                 'content': content,
                 'analysis': analysis,
                 'questionnaire_data': questionnaire_data,
-                'created_at': datetime.utcnow().isoformat()
+                'created_at': datetime.now(timezone.utc).isoformat()
             }
             
-            # Save to database
             print('💾 Saving mood entry to database...')
             response = self.supabase.table('mood_entries').insert(mood_entry).execute()
             
@@ -670,7 +621,6 @@ class MoodService:
             raise e
     
     def get_recent_mood_entries(self, user_id: str, limit: int = 30) -> List[Dict[str, Any]]:
-        """Get user's recent mood entries"""
         try:
             response = self.supabase.table('mood_entries')\
                 .select('mood_id, mood, content, analysis, created_at')\
@@ -687,7 +637,6 @@ class MoodService:
 @mood_bp.route('/mood/check-today', methods=['GET'])
 @auth_required
 def check_today_mood():
-    """Check if user has submitted mood today with strict enforcement"""
     user_id = request.args.get('userId')
     if not user_id:
         return jsonify({'error': 'Invalid or missing user_id'}), 400
@@ -697,18 +646,13 @@ def check_today_mood():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     
-    # Use the authenticated user ID from the decorator context
     authenticated_user_id = g.user.id
-
-    # Skip user ID mismatch check for test users
     test_user_ids = ['user123', 'test-user', 'demo-user']
     if user_id not in test_user_ids and authenticated_user_id != user_id:
         return jsonify({'error': 'Unauthorized: User ID mismatch'}), 403
     
     try:
-        # The supabase client is already authenticated by the decorator
         mood_service = MoodService(current_app.supabase)
-        
         existing_entry = mood_service.check_daily_mood_exists(user_id)
         
         if existing_entry:
@@ -738,9 +682,7 @@ def check_today_mood():
 @mood_bp.route('/mood', methods=['POST'])
 @auth_required
 def save_mood_entry():
-    """Save new mood entry with strict daily limit and Gemini AI analysis"""
     start_time = time.time()
-
     data = request.get_json()
     if not data:
         return jsonify({'error': 'No data provided'}), 400
@@ -750,7 +692,6 @@ def save_mood_entry():
     content = data.get('content')
     questionnaire_data = data.get('questionnaireData', {})
 
-    # Validate inputs
     if not user_id:
         return jsonify({'error': 'Invalid or missing user_id'}), 400
     
@@ -759,10 +700,7 @@ def save_mood_entry():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     
-    # Use the authenticated user ID from the decorator context
     authenticated_user_id = g.user.id
-    
-    # Skip user ID mismatch check for test users
     test_user_ids = ['user123', 'test-user', 'demo-user']
     if user_id not in test_user_ids and authenticated_user_id != user_id:
         return jsonify({'error': 'Unauthorized: User ID mismatch'}), 403
@@ -772,11 +710,8 @@ def save_mood_entry():
 
     try:
         print(f'💾 Processing mood entry for user: {user_id}')
-        
-        # The supabase client is already authenticated by the decorator
         mood_service = MoodService(current_app.supabase)
         
-        # Strict daily limit check FIRST
         print('🔍 Checking daily limit enforcement...')
         existing_entry = mood_service.check_daily_mood_exists(user_id)
         if existing_entry:
@@ -788,10 +723,9 @@ def save_mood_entry():
                 'existingEntry': True,
                 'submittedAt': existing_entry['created_at'],
                 'dailyLimitReached': True,
-                'nextSubmissionAllowed': f'{(date.today() + timedelta(days=1)).isoformat()}T00:00:00'
+                'nextSubmissionAllowed': f'{(datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()}T00:00:00'
             }), 200
         
-        # Proceed with Gemini AI mood entry save
         print('✅ Daily limit check passed, proceeding with Gemini AI analysis')
         result = mood_service.save_mood_entry(user_id, mood, content, questionnaire_data)
         
@@ -815,7 +749,6 @@ def save_mood_entry():
 @mood_bp.route('/mood', methods=['GET'])
 @auth_required
 def get_mood_entries():
-    """Get user's mood entries"""
     user_id = request.args.get('userId')
     if not user_id:
         return jsonify({'error': 'Invalid or missing user_id'}), 400
@@ -825,21 +758,15 @@ def get_mood_entries():
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     
-    # Use the authenticated user ID from the decorator context
     authenticated_user_id = g.user.id
-    
-    # Skip user ID mismatch check for test users
     test_user_ids = ['user123', 'test-user', 'demo-user']
     if user_id not in test_user_ids and authenticated_user_id != user_id:
         return jsonify({'error': 'Unauthorized: User ID mismatch'}), 403
 
     try:
-        # The supabase client is already authenticated by the decorator
         mood_service = MoodService(current_app.supabase)
-        
         entries = mood_service.get_recent_mood_entries(user_id)
         
-        # Format entries for response
         formatted_entries = [
             {
                 'id': entry['mood_id'],
