@@ -27,11 +27,14 @@ def create_app():
         app.supabase = None
     else:
         try:
-            # Initialize Supabase client for version 2.0+
-            app.supabase = create_client(app.config['SUPABASE_URL'], app.config['SUPABASE_KEY'])
-            logging.info("Supabase client initialized successfully with service key.")
+            # Initialize Supabase client for version 2.0+ - FIXED VERSION
+            app.supabase = create_client(
+                supabase_url=app.config['SUPABASE_URL'],
+                supabase_key=app.config['SUPABASE_KEY']
+            )
+            logging.info("✅ Supabase client initialized successfully with service key.")
         except Exception as e:
-            logging.error(f"CRITICAL ERROR: Failed to initialize Supabase client with service key: {e}", exc_info=True)
+            logging.error(f"CRITICAL ERROR: Failed to initialize Supabase client: {e}", exc_info=True)
             app.supabase = None
 
     # --- CORS and Blueprint Registration ---
@@ -74,13 +77,15 @@ def create_app():
         app.register_blueprint(journal_prompt_bp, url_prefix='/api')
         logging.info("Successfully registered 'journal_prompt_bp' blueprint with /api prefix.")
 
+        # Register Events Blueprint
         from .routes.events import events_bp
-        app.register_blueprint(events_bp)
+        app.register_blueprint(events_bp, url_prefix='/api')
+        logging.info("Successfully registered 'events_bp' blueprint with /api prefix.")
 
-        # Debug route to confirm /api/journalScore is accessible
-        @app.route('/api/journalScore', methods=['GET'])
-        def debug_journal_score():
-            return jsonify({"message": "Journal score endpoint is accessible"}), 200
+        # Register Main Blueprint
+        from .routes.main import main_bp
+        app.register_blueprint(main_bp, url_prefix='/api')
+        logging.info("Successfully registered 'main_bp' blueprint with /api prefix.")
 
     except ImportError as e:
         logging.error(f"CRITICAL ERROR: Failed to import or register blueprint: {e}", exc_info=True)

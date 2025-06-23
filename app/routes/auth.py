@@ -29,8 +29,11 @@ print(f"🔧 Supabase Key: {'*' * 10}...{SUPABASE_KEY[-4:] if SUPABASE_KEY else 
 
 # Initialize Supabase client
 try:
-    # For Supabase 2.0+, create client without any additional parameters
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    # For Supabase 2.0+, create client with explicit parameters
+    supabase: Client = create_client(
+        supabase_url=SUPABASE_URL,
+        supabase_key=SUPABASE_KEY
+    )
     print("✅ Supabase client initialized successfully")
 except Exception as e:
     print(f"❌ Failed to initialize Supabase client: {e}")
@@ -160,7 +163,10 @@ def change_password():
                 return jsonify({"error": "Failed to get valid session"}), 500
             
             # Create a new client with the fresh session token
-            session_supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+            session_supabase = create_client(
+                supabase_url=SUPABASE_URL,
+                supabase_key=SUPABASE_KEY
+            )
             
             # Set the auth token from the fresh session
             session_supabase.auth.set_session(session.access_token, session.refresh_token)
@@ -471,7 +477,10 @@ def logout():
                 logger.info("🔄 Attempting Supabase logout method 1...")
                 
                 # Create a new supabase client instance for this logout
-                temp_supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+                temp_supabase = create_client(
+                    supabase_url=SUPABASE_URL,
+                    supabase_key=SUPABASE_KEY
+                )
                 
                 # Try to set session and logout
                 try:
@@ -598,8 +607,6 @@ def refresh_token():
             
     except Exception as e:
         return jsonify({"error": f"Token refresh failed: {str(e)}"}), 401
-
-
 
 # Health check endpoint
 @auth_bp.route('/health', methods=['GET'])
