@@ -81,7 +81,7 @@ def create_app():
 
         # Register Events Blueprint
         from .routes.events import events_bp
-        app.register_blueprint(events_bp, url_prefix='/api')
+        app.register_blueprint(events_bp)
         logging.info("Successfully registered 'events_bp' blueprint with /api prefix.")
 
         # Register Main Blueprint
