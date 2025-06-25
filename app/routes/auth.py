@@ -296,6 +296,7 @@ def verify_otp():
 
 @auth_bp.route('/login', methods=['POST'])
 def login():
+    """Enhanced login endpoint with better error handling"""
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
 
@@ -308,19 +309,45 @@ def login():
         return jsonify({"error": "Email or phone and password required"}), 400
 
     try:
+        # Create a fresh Supabase client for this request
+        fresh_supabase = create_client(
+            supabase_url=SUPABASE_URL,
+            supabase_key=SUPABASE_KEY
+        )
+        
+        # Attempt login with email
         if email:
-            response = supabase.auth.sign_in_with_password({
-                "email": email,
-                "password": password
-            })
+            try:
+                response = fresh_supabase.auth.sign_in_with_password({
+                    "email": email,
+                    "password": password
+                })
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "invalid login credentials" in error_msg:
+                    return jsonify({"error": "Invalid email or password"}), 401
+                elif "email not confirmed" in error_msg:
+                    return jsonify({"error": "Please verify your email first"}), 403
+                else:
+                    logger.error(f"Login error with email: {e}")
+                    return jsonify({"error": "Authentication failed"}), 401
         else:
-            response = supabase.auth.sign_in_with_password({
-                "phone": phone,
-                "password": password
-            })
+            # Phone login (if implemented)
+            try:
+                response = fresh_supabase.auth.sign_in_with_password({
+                    "phone": phone,
+                    "password": password
+                })
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "invalid login credentials" in error_msg:
+                    return jsonify({"error": "Invalid phone or password"}), 401
+                else:
+                    logger.error(f"Login error with phone: {e}")
+                    return jsonify({"error": "Authentication failed"}), 401
 
         if not response or not hasattr(response, 'session') or not hasattr(response, 'user'):
-            return jsonify({"error": "Unexpected response from Supabase"}), 500
+            return jsonify({"error": "Unexpected response from authentication service"}), 500
 
         session = response.session
         user = response.user
@@ -332,38 +359,44 @@ def login():
         user_email = user.email
         user_phone = user.phone
 
-        # Check if user exists in the users table
-        existing = supabase.table('user').select('user_id').eq('user_id', user_id).execute()
-        if not existing.data:
-            # Insert user into users table
-            supabase.table('user').insert({
-                "user_id": user_id,
-                "email": user_email,
-                "phone": user_phone or '',
-                "name": user_email.split('@')[0] if user_email else 'User',
-                "join_date": datetime.utcnow().isoformat()
-            }).execute()
+        # Get user metadata for display name
+        display_name = user.user_metadata.get('name', 'User') if user.user_metadata else 'User'
+        
+        # Check if user exists in the users table, create if not
+        try:
+            existing = fresh_supabase.table('user').select('user_id').eq('user_id', user_id).execute()
+            if not existing.data:
+                # Insert user into users table
+                fresh_supabase.table('user').insert({
+                    "user_id": user_id,
+                    "email": user_email,
+                    "phone": user_phone or '',
+                    "name": display_name,
+                    "join_date": datetime.utcnow().isoformat()
+                }).execute()
+        except Exception as e:
+            logger.warning(f"Could not check/create user in database: {e}")
+            # Continue with login even if database operation fails
         
         return jsonify({
+            "success": True,
             "message": "Login successful",
             "access_token": session.access_token,
             "refresh_token": session.refresh_token,
             "user": {
                 "id": user_id,
                 "email": user_email,
-                "phone": user_phone
+                "phone": user_phone,
+                "display_name": display_name
             }
         }), 200
 
     except Exception as e:
-        error_msg = str(e)
-        if "Invalid login credentials" in error_msg:
-            return jsonify({"error": "Invalid email/phone or password"}), 401
-        if "Email not confirmed" in error_msg:
-            return jsonify({"error": "Please verify your email first"}), 403
-        # Always return JSON, never plain text
-        current_app.logger.error(f"Login error: {error_msg}", exc_info=True)
-        return jsonify({"error": "A server error has occurred", "details": error_msg}), 500
+        logger.error(f"Unexpected login error: {e}", exc_info=True)
+        return jsonify({
+            "error": "A server error has occurred",
+            "details": str(e)
+        }), 500
 
 @auth_bp.route('/reset-password', methods=['POST'])
 def reset_password():
