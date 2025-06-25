@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 journal_prompt_bp = Blueprint('journal_prompt_bp', __name__)
 
 # Local prompt templates for different types
+# Updated for deployment - v1.1
 GUIDED_PROMPTS = [
     "What was a highlight of your day, big or small?",
     "What challenged you today, and how did you approach it?",
