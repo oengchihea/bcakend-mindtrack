@@ -4,20 +4,30 @@ import json
 import logging
 from flask import Blueprint, request, jsonify, current_app
 from datetime import datetime, timezone
-import google.generativeai as genai
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+
+# Try to import google.generativeai, but make it optional
+try:
+    import google.generativeai as genai
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    genai = None
 
 journal_prompt_bp = Blueprint('journal_prompt_bp', __name__)
 MODEL_NAME = "gemini-1.5-flash-latest"
 
+# Debug logging
+logging.info("Journal prompt blueprint created successfully")
+
 # Local prompt templates for fallback
-# Updated for deployment - v1.1
+# Updated for deployment - v1.2 (FIXED 404 ERROR)
 GUIDED_PROMPTS = [
     "What was a highlight of your day, big or small?",
     "What challenged you today, and how did you approach it?",
@@ -133,8 +143,8 @@ TOPIC_PROMPTS = {
 
 def generate_prompts_with_ai(prompt_type, count, mood=None, topic=None):
     """Generate prompts using Gemini AI if available, otherwise use fallback"""
-    if not GEMINI_API_KEY:
-        current_app.logger.warning("GEMINI_API_KEY not available, using fallback prompts")
+    if not GEMINI_AVAILABLE or not GEMINI_API_KEY:
+        current_app.logger.warning("GEMINI_API_KEY not available or google-generativeai not installed, using fallback prompts")
         return generate_fallback_prompts(prompt_type, count, mood, topic)
     
     try:
@@ -229,18 +239,36 @@ def generate_fallback_prompts(prompt_type, count, mood=None, topic=None):
 
     return prompts
 
-@journal_prompt_bp.route('/journal-prompt/generate', methods=['POST'])
+@journal_prompt_bp.route('/journal-prompt/test', methods=['GET'])
+def test_journal_prompt():
+    """Test endpoint to verify the blueprint is working"""
+    return jsonify({"message": "Journal prompt blueprint is working!", "status": "success"}), 200
+
+@journal_prompt_bp.route('/journal-prompt/generate', methods=['GET', 'POST'])
 def generate_journal_prompts():
     """
     Generate journal prompts based on the request parameters.
     """
     current_app.logger.info(f"Generating journal prompts at {datetime.now(timezone.utc).isoformat()}")
+    current_app.logger.info(f"Request method: {request.method}")
 
+    if request.method == 'GET':
+        # Return sample prompts for testing
+        sample_prompts = [
+            "What was a highlight of your day, big or small?",
+            "What challenged you today, and how did you approach it?",
+            "Describe something you're grateful for right now."
+        ]
+        return jsonify({"prompts": sample_prompts, "message": "Sample prompts for testing"}), 200
+
+    # POST method handling
     # Get the request data
     incoming_data = request.get_json()
     if not incoming_data:
         current_app.logger.warning("No JSON data received for journal prompt generation.")
-        return jsonify({"error": "No data provided"}), 400
+        # Return fallback prompts with message
+        fallback_prompts = generate_fallback_prompts('guided', 3)
+        return jsonify({"prompts": fallback_prompts, "message": "No data provided. Fallback prompts used."}), 200
 
     prompt_type = incoming_data.get('promptType', 'guided')
     count = incoming_data.get('count', 3)
@@ -252,14 +280,30 @@ def generate_journal_prompts():
     try:
         # Try AI generation first, fallback to local prompts
         prompts = generate_prompts_with_ai(prompt_type, count, mood, topic)
-        
         if not prompts:
             current_app.logger.error("Failed to generate any prompts")
-            return jsonify({"error": "Failed to generate prompts"}), 500
+            fallback_prompts = generate_fallback_prompts(prompt_type, count, mood, topic)
+            return jsonify({"prompts": fallback_prompts, "message": "Failed to generate prompts. Fallback prompts used."}), 200
 
         current_app.logger.info(f"Successfully generated {len(prompts)} prompts")
-        return jsonify({"prompts": prompts}), 200
+        return jsonify({"prompts": prompts, "message": "Prompts generated successfully."}), 200
 
     except Exception as e:
         current_app.logger.error(f"Error generating prompts: {e}", exc_info=True)
-        return jsonify({"error": "Failed to generate prompts"}), 500
+        # Return fallback prompts, not a 500 error
+        fallback_prompts = generate_fallback_prompts(prompt_type, count, mood, topic)
+        return jsonify({"prompts": fallback_prompts, "message": "Fallback prompts used due to error."}), 200
+
+# Alternative route for compatibility
+@journal_prompt_bp.route('/journalPrompt/generate', methods=['GET', 'POST'])
+def generate_journal_prompts_alt():
+    """Alternative route for journal prompt generation"""
+    return generate_journal_prompts()
+
+# Debug: Print when module is loaded
+print("Journal prompt module loaded successfully!")
+
+@journal_prompt_bp.route('/', methods=['GET'])
+def root():
+    """Root route for journal prompt blueprint"""
+    return jsonify({"message": "Journal prompt blueprint root route", "status": "success"}), 200

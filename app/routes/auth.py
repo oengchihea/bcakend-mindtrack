@@ -361,7 +361,9 @@ def login():
             return jsonify({"error": "Invalid email/phone or password"}), 401
         if "Email not confirmed" in error_msg:
             return jsonify({"error": "Please verify your email first"}), 403
-        return jsonify({"error": f"Login failed: {error_msg}"}), 400
+        # Always return JSON, never plain text
+        current_app.logger.error(f"Login error: {error_msg}", exc_info=True)
+        return jsonify({"error": "A server error has occurred", "details": error_msg}), 500
 
 @auth_bp.route('/reset-password', methods=['POST'])
 def reset_password():

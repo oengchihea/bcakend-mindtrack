@@ -5,6 +5,7 @@ Test script to verify Supabase client initialization with final fixes
 import os
 from dotenv import load_dotenv
 from supabase import create_client
+import json
 
 def test_supabase_initialization():
     """Test if Supabase client can be initialized without errors"""
@@ -21,7 +22,7 @@ def test_supabase_initialization():
         print(f"🔧 Supabase Key: {'*' * 10}...{supabase_key[-4:] if supabase_key else 'None'}")
         
         if not supabase_url or not supabase_key:
-            print("❌ Missing environment variables")
+            print(json.dumps({"error": "Missing environment variables"}))
             return False
         
         # Test client creation with explicit parameters

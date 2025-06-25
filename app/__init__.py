@@ -75,9 +75,13 @@ def create_app():
         logging.info("Successfully registered 'analyze_bp' blueprint with /api prefix.")
 
         # Register Journal Prompt Blueprint
-        from .routes.journal_prompt import journal_prompt_bp
-        app.register_blueprint(journal_prompt_bp, url_prefix='/api')
-        logging.info("Successfully registered 'journal_prompt_bp' blueprint with /api prefix.")
+        try:
+            from .routes.journal_prompt import journal_prompt_bp
+            app.register_blueprint(journal_prompt_bp, url_prefix='/api')
+            logging.info("Successfully registered 'journal_prompt_bp' blueprint with /api prefix.")
+            logging.info(f"Journal prompt routes: {[str(rule) for rule in app.url_map.iter_rules() if 'journal_prompt' in str(rule)]}")
+        except Exception as e:
+            logging.error(f"CRITICAL ERROR: Failed to register journal_prompt_bp blueprint: {e}", exc_info=True)
 
         # Register Events Blueprint
         from .routes.events import events_bp
