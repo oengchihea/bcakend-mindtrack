@@ -1,11 +1,22 @@
 import os
 import random
+import json
+import logging
 from flask import Blueprint, request, jsonify, current_app
 from datetime import datetime, timezone
+import google.generativeai as genai
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 journal_prompt_bp = Blueprint('journal_prompt_bp', __name__)
+MODEL_NAME = "gemini-1.5-flash-latest"
 
-# Local prompt templates for different types
+# Local prompt templates for fallback
 # Updated for deployment - v1.1
 GUIDED_PROMPTS = [
     "What was a highlight of your day, big or small?",
@@ -120,6 +131,104 @@ TOPIC_PROMPTS = {
     ]
 }
 
+def generate_prompts_with_ai(prompt_type, count, mood=None, topic=None):
+    """Generate prompts using Gemini AI if available, otherwise use fallback"""
+    if not GEMINI_API_KEY:
+        current_app.logger.warning("GEMINI_API_KEY not available, using fallback prompts")
+        return generate_fallback_prompts(prompt_type, count, mood, topic)
+    
+    try:
+        model = genai.GenerativeModel(
+            model_name=MODEL_NAME,
+            generation_config={
+                "temperature": 0.8,
+                "top_k": 40,
+                "top_p": 0.9,
+                "max_output_tokens": 350
+            },
+            safety_settings=[
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
+            ]
+        )
+
+        # Build the instruction based on prompt type
+        if prompt_type == "mood" and mood:
+            instruction = f"""Generate {count} empathetic, radically distinct, and deeply insightful journal questions for someone feeling "{mood}", for the "Mindtrack" app. Each question must help them explore this specific mood "{mood}" from a genuinely unique dimensional perspective. Ensure maximum variety in meaning and focus with every new set of prompts.
+
+Return the prompts as a JSON object with a 'prompts' array in this exact format: {{"prompts": ["prompt1", "prompt2", "prompt3"]}}. DO NOT include any text before or after the JSON."""
+        elif prompt_type == "topic" and topic:
+            instruction = f"""Generate {count} radically distinct and deeply insightful journal questions about "{topic}" for the "Mindtrack" app. Each question must encourage focused reflection on how this topic uniquely influences the user's current mood, thoughts, and feelings from a different dimensional perspective each time.
+
+Return the prompts as a JSON object with a 'prompts' array in this exact format: {{"prompts": ["prompt1", "prompt2", "prompt3"]}}. DO NOT include any text before or after the JSON."""
+        else:
+            instruction = f"""Generate {count} radically distinct and deeply insightful journal questions for the "Mindtrack" app. Each question must offer a unique dimensional exploration of the user's current emotional landscape, ensuring maximum variety in meaning and focus with every new set of prompts.
+
+Return the prompts as a JSON object with a 'prompts' array in this exact format: {{"prompts": ["prompt1", "prompt2", "prompt3"]}}. DO NOT include any text before or after the JSON."""
+
+        response = model.generate_content(instruction)
+        json_string = response.text.strip()
+        
+        # Clean and parse JSON
+        json_string = json_string.replace("```json\n", "").replace("```", "").strip()
+        if not json_string.startswith("{"):
+            json_string = "{" + json_string + "}"
+
+        result = json.loads(json_string)
+        if result.get('prompts') and isinstance(result['prompts'], list) and len(result['prompts']) > 0:
+            current_app.logger.info(f"Successfully generated {len(result['prompts'])} AI prompts")
+            return result['prompts']
+        else:
+            current_app.logger.warning("Invalid AI response format, using fallback")
+            return generate_fallback_prompts(prompt_type, count, mood, topic)
+            
+    except Exception as e:
+        current_app.logger.error(f"Error generating AI prompts: {e}")
+        return generate_fallback_prompts(prompt_type, count, mood, topic)
+
+def generate_fallback_prompts(prompt_type, count, mood=None, topic=None):
+    """Generate prompts using local templates"""
+    prompts = []
+    
+    if prompt_type == 'mood' and mood:
+        mood_lower = mood.lower()
+        available_prompts = []
+        
+        if mood_lower in MOOD_PROMPTS:
+            available_prompts.extend(MOOD_PROMPTS[mood_lower])
+        available_prompts.extend(GUIDED_PROMPTS)
+        
+        random.shuffle(available_prompts)
+        prompts = available_prompts[:count]
+        
+    elif prompt_type == 'topic' and topic:
+        topic_lower = topic.lower()
+        available_prompts = []
+        
+        if topic_lower in TOPIC_PROMPTS:
+            available_prompts.extend(TOPIC_PROMPTS[topic_lower])
+        available_prompts.extend(GUIDED_PROMPTS)
+        
+        random.shuffle(available_prompts)
+        prompts = available_prompts[:count]
+        
+    else:
+        available_prompts = GUIDED_PROMPTS.copy()
+        random.shuffle(available_prompts)
+        prompts = available_prompts[:count]
+
+    # Ensure we have the requested number of prompts
+    while len(prompts) < count and len(GUIDED_PROMPTS) > 0:
+        additional_prompts = [p for p in GUIDED_PROMPTS if p not in prompts]
+        if additional_prompts:
+            prompts.append(random.choice(additional_prompts))
+        else:
+            break
+
+    return prompts
+
 @journal_prompt_bp.route('/journal-prompt/generate', methods=['POST'])
 def generate_journal_prompts():
     """
@@ -141,53 +250,12 @@ def generate_journal_prompts():
     current_app.logger.info(f"Generating {count} prompts of type: {prompt_type}, mood: {mood}, topic: {topic}")
 
     try:
-        prompts = []
+        # Try AI generation first, fallback to local prompts
+        prompts = generate_prompts_with_ai(prompt_type, count, mood, topic)
         
-        if prompt_type == 'mood' and mood:
-            # Generate mood-specific prompts
-            mood_lower = mood.lower()
-            available_prompts = []
-            
-            # Get prompts for the specific mood
-            if mood_lower in MOOD_PROMPTS:
-                available_prompts.extend(MOOD_PROMPTS[mood_lower])
-            
-            # Add some general guided prompts as fallback
-            available_prompts.extend(GUIDED_PROMPTS)
-            
-            # Shuffle and select the requested number
-            random.shuffle(available_prompts)
-            prompts = available_prompts[:count]
-            
-        elif prompt_type == 'topic' and topic:
-            # Generate topic-specific prompts
-            topic_lower = topic.lower()
-            available_prompts = []
-            
-            # Get prompts for the specific topic
-            if topic_lower in TOPIC_PROMPTS:
-                available_prompts.extend(TOPIC_PROMPTS[topic_lower])
-            
-            # Add some general guided prompts as fallback
-            available_prompts.extend(GUIDED_PROMPTS)
-            
-            # Shuffle and select the requested number
-            random.shuffle(available_prompts)
-            prompts = available_prompts[:count]
-            
-        else:
-            # Generate general guided prompts
-            available_prompts = GUIDED_PROMPTS.copy()
-            random.shuffle(available_prompts)
-            prompts = available_prompts[:count]
-
-        # Ensure we have the requested number of prompts
-        while len(prompts) < count and len(GUIDED_PROMPTS) > 0:
-            additional_prompts = [p for p in GUIDED_PROMPTS if p not in prompts]
-            if additional_prompts:
-                prompts.append(random.choice(additional_prompts))
-            else:
-                break
+        if not prompts:
+            current_app.logger.error("Failed to generate any prompts")
+            return jsonify({"error": "Failed to generate prompts"}), 500
 
         current_app.logger.info(f"Successfully generated {len(prompts)} prompts")
         return jsonify({"prompts": prompts}), 200
