@@ -11,6 +11,7 @@ print(f"DEBUG run.py: SUPABASE_URL loaded: {'YES' if supabase_url else 'NO - CRI
 print(f"DEBUG run.py: SUPABASE_KEY loaded: {'YES' if supabase_key else 'NO - CRITICAL'} (first 10 chars: {supabase_key[:10] if supabase_key else 'NOT FOUND'})")
 # --- END DEBUG LINES ---
 
+# Create the Flask app using the factory pattern
 app = create_app()
 
 if __name__ == '__main__':

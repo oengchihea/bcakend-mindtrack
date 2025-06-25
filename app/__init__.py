@@ -100,9 +100,13 @@ def create_app():
     @app.route('/')
     def root():
         if hasattr(app, 'supabase') and app.supabase:
-            return "Flask backend is running. Supabase client appears to be initialized."
+            return jsonify({
+                "message": "Flask backend is running. Supabase client appears to be initialized."
+            }), 200
         else:
-            return "Flask backend is running. Supabase client FAILED to initialize (check logs)."
+            return jsonify({
+                "message": "Flask backend is running. Supabase client FAILED to initialize (check logs)."
+            }), 200
 
     @app.route('/api/health')
     def health_check():
@@ -117,6 +121,16 @@ def create_app():
             "supabase_client": supabase_status,
             "registered_blueprints": blueprints_registered if blueprints_registered else "None"
         }), 200
+
+    # --- Global Error Handler ---
+    @app.errorhandler(Exception)
+    def handle_exception(e):
+        import traceback
+        current_app.logger.error(traceback.format_exc())
+        return jsonify({
+            "error": "A server error has occurred",
+            "details": str(e)
+        }), 500
 
     logging.info("--- Flask app creation finished ---")
     return app
