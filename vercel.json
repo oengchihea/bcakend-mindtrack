@@ -8,11 +8,22 @@
   ],
   "routes": [
     {
+      "src": "/api/(.*)",
+      "dest": "/run.py"
+    },
+    {
       "src": "/(.*)",
-      "dest": "run.py"
+      "dest": "/run.py"
     }
   ],
   "env": {
+    "PYTHONPATH": ".",
+    "FLASK_APP": "run.py",
     "FLASK_ENV": "production"
+  },
+  "functions": {
+    "run.py": {
+      "maxDuration": 30
+    }
   }
 }
