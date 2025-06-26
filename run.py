@@ -18,18 +18,20 @@ logger = logging.getLogger(__name__)
 
 def validate_environment():
     """Validate required environment variables"""
-    required_vars = [
-        'SUPABASE_URL',
-        'SUPABASE_ANON_KEY'
-    ]
+    # Check for Supabase URL
+    supabase_url = os.getenv('SUPABASE_URL')
+    if not supabase_url:
+        logger.error("Missing SUPABASE_URL environment variable")
+        return False
     
-    missing_vars = []
-    for var in required_vars:
-        if not os.getenv(var):
-            missing_vars.append(var)
-    
-    if missing_vars:
-        logger.error(f"Missing required environment variables: {missing_vars}")
+    # Check for Supabase key (support multiple variable names)
+    supabase_key = (
+        os.getenv('SUPABASE_ANON_KEY') or 
+        os.getenv('SUPABASE_ROLE_SERVICE') or
+        os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+    )
+    if not supabase_key:
+        logger.error("Missing Supabase key environment variable (SUPABASE_ANON_KEY, SUPABASE_ROLE_SERVICE, or SUPABASE_SERVICE_ROLE_KEY)")
         return False
     
     logger.info("All required environment variables are present")
@@ -45,21 +47,28 @@ def create_application():
          methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
          allow_headers=['Content-Type', 'Authorization'])
     
-    # App configuration
+    # App configuration with flexible key handling
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'fallback-secret-key')
     app.config['SUPABASE_URL'] = os.getenv('SUPABASE_URL')
-    app.config['SUPABASE_ANON_KEY'] = os.getenv('SUPABASE_ANON_KEY')
-    app.config['SUPABASE_SERVICE_ROLE_KEY'] = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+    
+    # Support multiple Supabase key variable names
+    supabase_anon_key = (
+        os.getenv('SUPABASE_ANON_KEY') or 
+        os.getenv('SUPABASE_ROLE_SERVICE') or
+        os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+    )
+    app.config['SUPABASE_ANON_KEY'] = supabase_anon_key
+    app.config['SUPABASE_SERVICE_ROLE_KEY'] = os.getenv('SUPABASE_SERVICE_ROLE_KEY') or supabase_anon_key
     
     # Initialize Supabase client globally
     try:
         from supabase import create_client
         supabase_url = app.config['SUPABASE_URL']
-        supabase_key = app.config['SUPABASE_ANON_KEY']
+        supabase_key = supabase_anon_key
         
         if supabase_url and supabase_key:
             app.supabase = create_client(supabase_url, supabase_key)
-            logger.info("✅ Supabase client initialized")
+            logger.info(f"✅ Supabase client initialized with URL: {supabase_url[:50]}...")
         else:
             app.supabase = None
             logger.error("❌ Missing Supabase configuration")
@@ -125,6 +134,32 @@ def create_application():
             'blueprints_loaded': len(app.blueprints) > 0
         }), 200 if env_valid else 503
     
+    # Diagnostic route for debugging
+    @app.route('/api/debug', methods=['GET'])
+    def debug_info():
+        try:
+            env_info = {
+                'SUPABASE_URL': bool(os.getenv('SUPABASE_URL')),
+                'SUPABASE_ANON_KEY': bool(os.getenv('SUPABASE_ANON_KEY')),
+                'SUPABASE_ROLE_SERVICE': bool(os.getenv('SUPABASE_ROLE_SERVICE')),
+                'SECRET_KEY': bool(os.getenv('SECRET_KEY')),
+                'VERCEL_ENV': os.getenv('VERCEL_ENV', 'development'),
+                'python_version': sys.version,
+                'blueprints': list(app.blueprints.keys()) if hasattr(app, 'blueprints') else [],
+                'supabase_client': hasattr(app, 'supabase') and app.supabase is not None
+            }
+            return jsonify({
+                'status': 'debug_info',
+                'environment': env_info,
+                'message': 'Debug information retrieved successfully'
+            }), 200
+        except Exception as e:
+            return jsonify({
+                'status': 'debug_error',
+                'error': str(e),
+                'type': type(e).__name__
+            }), 500
+    
     # Global error handler
     @app.errorhandler(Exception)
     def handle_exception(e):
@@ -158,11 +193,35 @@ def create_fallback_routes(app):
         }), 500
 
 # Validate environment on startup
-env_valid = validate_environment()
-if not env_valid:
-    logger.error("❌ Environment validation failed")
-
-app = create_application()
+try:
+    env_valid = validate_environment()
+    if not env_valid:
+        logger.error("❌ Environment validation failed")
+    
+    app = create_application()
+    logger.info("✅ Flask application created successfully")
+    
+except Exception as e:
+    logger.error(f"❌ Critical error during app creation: {e}", exc_info=True)
+    # Create minimal fallback app for debugging
+    app = Flask(__name__)
+    CORS(app, origins=['*'])
+    
+    @app.route('/')
+    def fallback_root():
+        return jsonify({
+            'error': 'App creation failed',
+            'message': str(e),
+            'status': 'critical_error'
+        }), 500
+    
+    @app.route('/api/health')
+    def fallback_health():
+        return jsonify({
+            'status': 'critical_error',
+            'error': str(e),
+            'message': 'Application failed to initialize properly'
+        }), 500
 
 # For Vercel deployment
 application = app
