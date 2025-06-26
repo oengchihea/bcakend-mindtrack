@@ -24,14 +24,15 @@ def validate_environment():
         logger.error("Missing SUPABASE_URL environment variable")
         return False
     
-    # Check for Supabase key (support multiple variable names)
+    # Check for Supabase key (support multiple variable names) - FIXED
     supabase_key = (
         os.getenv('SUPABASE_ANON_KEY') or 
+        os.getenv('SUPABASE_KEY') or 
         os.getenv('SUPABASE_ROLE_SERVICE') or
         os.getenv('SUPABASE_SERVICE_ROLE_KEY')
     )
     if not supabase_key:
-        logger.error("Missing Supabase key environment variable (SUPABASE_ANON_KEY, SUPABASE_ROLE_SERVICE, or SUPABASE_SERVICE_ROLE_KEY)")
+        logger.error("Missing Supabase key environment variable")
         return False
     
     logger.info("All required environment variables are present")
@@ -47,17 +48,19 @@ def create_application():
          methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
          allow_headers=['Content-Type', 'Authorization'])
     
-    # App configuration with flexible key handling
+    # App configuration with flexible key handling - FIXED
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'fallback-secret-key')
     app.config['SUPABASE_URL'] = os.getenv('SUPABASE_URL')
     
-    # Support multiple Supabase key variable names
+    # Support multiple Supabase key variable names - FIXED
     supabase_anon_key = (
         os.getenv('SUPABASE_ANON_KEY') or 
+        os.getenv('SUPABASE_KEY') or 
         os.getenv('SUPABASE_ROLE_SERVICE') or
         os.getenv('SUPABASE_SERVICE_ROLE_KEY')
     )
     app.config['SUPABASE_ANON_KEY'] = supabase_anon_key
+    app.config['SUPABASE_KEY'] = supabase_anon_key  # Add this for compatibility
     app.config['SUPABASE_SERVICE_ROLE_KEY'] = os.getenv('SUPABASE_SERVICE_ROLE_KEY') or supabase_anon_key
     
     # Initialize Supabase client globally
@@ -84,9 +87,7 @@ def create_application():
         from app.routes.user import user_bp
         from app.routes.posts import posts_bp
         from app.routes.analyze_journal import analyze_bp
-        from app.routes.journal_prompt import journal_prompt_bp
         from app.routes.events import events_bp
-        from app.routes.main import main_bp
         
         # Register with /api prefix
         app.register_blueprint(auth_bp, url_prefix='/api')
@@ -95,9 +96,7 @@ def create_application():
         app.register_blueprint(user_bp, url_prefix='/api')
         app.register_blueprint(posts_bp, url_prefix='/api')
         app.register_blueprint(analyze_bp, url_prefix='/api')
-        app.register_blueprint(journal_prompt_bp, url_prefix='/api')
-        app.register_blueprint(events_bp, url_prefix='/api')
-        app.register_blueprint(main_bp, url_prefix='/api')
+        app.register_blueprint(events_bp)  # This already has /api prefix in the blueprint
         
         logger.info("✅ All blueprints registered successfully")
         
@@ -114,6 +113,11 @@ def create_application():
             'status': 'running',
             'version': '1.0.0',
             'supabase_connected': app.supabase is not None,
+            'environment_variables': {
+                'SUPABASE_URL': bool(os.getenv('SUPABASE_URL')),
+                'SUPABASE_ANON_KEY': bool(os.getenv('SUPABASE_ANON_KEY')),
+                'SECRET_KEY': bool(os.getenv('SECRET_KEY'))
+            },
             'endpoints': {
                 'health': '/api/health',
                 'login': '/api/login',
@@ -131,7 +135,12 @@ def create_application():
             'environment_valid': env_valid,
             'supabase_connected': app.supabase is not None,
             'environment': 'production' if os.getenv('VERCEL_ENV') == 'production' else 'development',
-            'blueprints_loaded': len(app.blueprints) > 0
+            'blueprints_loaded': len(app.blueprints) > 0,
+            'environment_variables': {
+                'SUPABASE_URL': bool(os.getenv('SUPABASE_URL')),
+                'SUPABASE_ANON_KEY': bool(os.getenv('SUPABASE_ANON_KEY')),
+                'SECRET_KEY': bool(os.getenv('SECRET_KEY'))
+            }
         }), 200 if env_valid else 503
     
     # Diagnostic route for debugging
@@ -141,7 +150,7 @@ def create_application():
             env_info = {
                 'SUPABASE_URL': bool(os.getenv('SUPABASE_URL')),
                 'SUPABASE_ANON_KEY': bool(os.getenv('SUPABASE_ANON_KEY')),
-                'SUPABASE_ROLE_SERVICE': bool(os.getenv('SUPABASE_ROLE_SERVICE')),
+                'SUPABASE_KEY': bool(os.getenv('SUPABASE_KEY')),
                 'SECRET_KEY': bool(os.getenv('SECRET_KEY')),
                 'VERCEL_ENV': os.getenv('VERCEL_ENV', 'development'),
                 'python_version': sys.version,

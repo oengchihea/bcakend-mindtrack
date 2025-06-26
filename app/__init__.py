@@ -13,11 +13,18 @@ def create_app():
     load_dotenv()
     app = Flask(__name__)
 
-    # --- Environment Variable Check ---
+    # --- Environment Variable Check - FIXED ---
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
     app.config['SUPABASE_URL'] = os.environ.get('SUPABASE_URL')
-    app.config['SUPABASE_KEY'] = os.environ.get('SUPABASE_KEY')
-    app.config['SUPABASE_SERVICE_ROLE_KEY'] = os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
+    
+    # FIXED: Support multiple environment variable names
+    app.config['SUPABASE_KEY'] = (
+        os.environ.get('SUPABASE_ANON_KEY') or 
+        os.environ.get('SUPABASE_KEY') or
+        os.environ.get('SUPABASE_ROLE_SERVICE')
+    )
+    app.config['SUPABASE_ANON_KEY'] = app.config['SUPABASE_KEY']  # For compatibility
+    app.config['SUPABASE_SERVICE_ROLE_KEY'] = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or app.config['SUPABASE_KEY']
 
     logging.info(f"SUPABASE_URL Loaded: {'YES' if app.config['SUPABASE_URL'] else 'NO - CRITICAL'}")
     logging.info(f"SUPABASE_KEY Loaded: {'YES' if app.config['SUPABASE_KEY'] else 'NO - CRITICAL'}")
@@ -28,7 +35,7 @@ def create_app():
             logging.error("CRITICAL ERROR: Missing Supabase URL or Key in environment variables.")
             logging.error("Required environment variables:")
             logging.error("- SUPABASE_URL (your Supabase project URL)")
-            logging.error("- SUPABASE_KEY (your Supabase anon key)")
+            logging.error("- SUPABASE_ANON_KEY (your Supabase anon key)")
             app.supabase = None
             current_app.config['SUPABASE_CLIENT'] = None
         else:
@@ -40,7 +47,7 @@ def create_app():
             except Exception as e:
                 logging.error(f"CRITICAL ERROR: Failed to initialize Supabase client with service key: {e}", exc_info=True)
                 logging.error("This usually means:")
-                logging.error("- Invalid SUPABASE_URL or SUPABASE_KEY")
+                logging.error("- Invalid SUPABASE_URL or SUPABASE_ANON_KEY")
                 logging.error("- Network connectivity issues")
                 logging.error("- Supabase project is not accessible")
                 app.supabase = None
@@ -81,24 +88,10 @@ def create_app():
         app.register_blueprint(analyze_bp, url_prefix='/api')
         logging.info("Successfully registered 'analyze_bp' blueprint with /api prefix.")
 
-        # Register Journal Prompt Blueprint
-        try:
-            from .routes.journal_prompt import journal_prompt_bp
-            app.register_blueprint(journal_prompt_bp, url_prefix='/api')
-            logging.info("Successfully registered 'journal_prompt_bp' blueprint with /api prefix.")
-            logging.info(f"Journal prompt routes: {[str(rule) for rule in app.url_map.iter_rules() if 'journal_prompt' in str(rule)]}")
-        except Exception as e:
-            logging.error(f"CRITICAL ERROR: Failed to register journal_prompt_bp blueprint: {e}", exc_info=True)
-
         # Register Events Blueprint
         from .routes.events import events_bp
-        app.register_blueprint(events_bp)
-        logging.info("Successfully registered 'events_bp' blueprint with /api prefix.")
-
-        # Register Main Blueprint
-        from .routes.main import main_bp
-        app.register_blueprint(main_bp, url_prefix='/api')
-        logging.info("Successfully registered 'main_bp' blueprint with /api prefix.")
+        app.register_blueprint(events_bp)  # This already has /api prefix
+        logging.info("Successfully registered 'events_bp' blueprint.")
 
     except ImportError as e:
         logging.error(f"CRITICAL ERROR: Failed to import or register blueprint: {e}", exc_info=True)
@@ -117,7 +110,7 @@ def create_app():
                 "message": "Flask backend is running. Supabase client FAILED to initialize (check logs).",
                 "status": "degraded",
                 "supabase": "not_connected",
-                "action_required": "Check environment variables: SUPABASE_URL and SUPABASE_KEY"
+                "action_required": "Check environment variables: SUPABASE_URL and SUPABASE_ANON_KEY"
             }), 200
 
     @app.route('/api/health')
@@ -170,6 +163,3 @@ def create_app():
 
     logging.info("--- Flask app creation finished ---")
     return app
-
-# The app object is now created in `run.py` to have a single entrypoint.
-# The health checks are moved inside create_app.
