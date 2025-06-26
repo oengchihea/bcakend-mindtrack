@@ -155,35 +155,47 @@ def analyze_with_gemini(content, questionnaire_data, user_id, max_retries=3):
             )
 
             prompt = f"""
-Analyze the following journal entry for sentiment and emotional well-being:
-- Content: {content or 'No content provided'}
-- Questionnaire Data: {json.dumps(questionnaire_data or {})}
-- User ID: {user_id}
+You are an expert emotional well-being analyst. Carefully analyze this journal entry and provide an accurate assessment:
 
-Return a JSON object with:
-- sentiment: (e.g., "positive", "neutral", "negative")
-- score: (integer between 0 and 10, reflecting emotional well-being)
-- themes: (array of strings, e.g., ["stress", "gratitude"], must be non-empty)
-- insights: (brief string summarizing the journal's emotional content)
-- suggestions: (array of three strings with tailored suggestions to improve or maintain well-being)
-- emoji: (string with a relevant emoji)
+JOURNAL CONTENT: "{content or 'No content provided'}"
+QUESTIONNAIRE DATA: {json.dumps(questionnaire_data or {})}
 
-Example:
+ANALYSIS INSTRUCTIONS:
+1. SENTIMENT: Determine if the overall emotional tone is "positive", "negative", or "neutral"
+2. SCORE: Rate emotional well-being from 0-10 where:
+   - 0-2: Severe distress (depression, grief, trauma, suicidal thoughts)
+   - 3-4: Significant emotional difficulties (very sad, anxious, angry, overwhelmed)
+   - 5-6: Mild emotional challenges or neutral state (slight sadness, minor stress, okay)
+   - 7-8: Good emotional state (happy, content, grateful, motivated)
+   - 9-10: Excellent emotional well-being (joy, euphoria, deep peace, amazing day)
+
+3. THEMES: Identify specific emotional themes (e.g., "grief", "anxiety", "gratitude", "loneliness", "excitement", "stress", "love", "anger")
+
+4. INSIGHTS: Provide empathetic understanding of their emotional state
+
+5. SUGGESTIONS: Give 3 specific, actionable suggestions based on their emotional state
+
+IMPORTANT SCORING GUIDELINES:
+- If they mention sadness, loss, grief, depression: Score 2-4
+- If they mention anxiety, worry, stress: Score 3-5  
+- If they mention anger, frustration: Score 3-5
+- If they mention neutral/okay feelings: Score 5-6
+- If they mention happiness, gratitude, excitement: Score 7-9
+- If they mention extreme joy, amazing day, love: Score 9-10
+
+Return ONLY this JSON format:
 {{
-  "sentiment": "positive",
-  "score": 8,
-  "themes": ["stress", "gratitude"],
-  "insights": "Your journal reflects a positive mood with strong themes of gratitude.",
+  "sentiment": "negative|neutral|positive",
+  "score": integer_0_to_10,
+  "themes": ["theme1", "theme2"],
+  "insights": "Your understanding of their emotional state",
   "suggestions": [
-    "Continue noting things you're grateful for to maintain positivity.",
-    "Share your positive mood with others through kind acts.",
-    "Reflect on what made today joyful to replicate it."
+    "Specific suggestion 1",
+    "Specific suggestion 2", 
+    "Specific suggestion 3"
   ],
-  "emoji": "😊"
-}}
-
-Ensure 'score' is an integer between 0 and 10, 'themes' is non-empty, and 'suggestions' contains exactly three items.
-"""
+  "emoji": "relevant_emoji"
+}}"""
 
             response = model.generate_content(prompt)
             json_string = response.text.strip()
