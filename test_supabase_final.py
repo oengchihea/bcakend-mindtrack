@@ -118,10 +118,8 @@ def test_flask_app_creation():
         if current_dir not in sys.path:
             sys.path.insert(0, current_dir)
         
-        from app import create_app
-        logger.info("🔧 Creating Flask application...")
-        
-        app = create_app()
+        from run import app
+        logger.info("🔧 Testing Flask application from run.py...")
         logger.info("✅ Flask application created successfully")
         
         # Test if Supabase is available in app
