@@ -22,10 +22,13 @@ def create_app():
     logging.info(f"SUPABASE_URL Loaded: {'YES' if app.config['SUPABASE_URL'] else 'NO - CRITICAL'}")
     logging.info(f"SUPABASE_KEY Loaded: {'YES' if app.config['SUPABASE_KEY'] else 'NO - CRITICAL'}")
 
-    # Initialize Supabase client within application context
+    # Initialize Supabase client within application context - GRACEFUL HANDLING
     with app.app_context():
         if not all([app.config['SUPABASE_URL'], app.config['SUPABASE_KEY']]):
             logging.error("CRITICAL ERROR: Missing Supabase URL or Key in environment variables.")
+            logging.error("Required environment variables:")
+            logging.error("- SUPABASE_URL (your Supabase project URL)")
+            logging.error("- SUPABASE_KEY (your Supabase anon key)")
             app.supabase = None
             current_app.config['SUPABASE_CLIENT'] = None
         else:
@@ -36,6 +39,10 @@ def create_app():
                 logging.info("Supabase client initialized successfully with service key and stored in config.")
             except Exception as e:
                 logging.error(f"CRITICAL ERROR: Failed to initialize Supabase client with service key: {e}", exc_info=True)
+                logging.error("This usually means:")
+                logging.error("- Invalid SUPABASE_URL or SUPABASE_KEY")
+                logging.error("- Network connectivity issues")
+                logging.error("- Supabase project is not accessible")
                 app.supabase = None
                 current_app.config['SUPABASE_CLIENT'] = None
 
@@ -101,11 +108,16 @@ def create_app():
     def root():
         if hasattr(app, 'supabase') and app.supabase:
             return jsonify({
-                "message": "Flask backend is running. Supabase client appears to be initialized."
+                "message": "Flask backend is running. Supabase client appears to be initialized.",
+                "status": "ok",
+                "supabase": "connected"
             }), 200
         else:
             return jsonify({
-                "message": "Flask backend is running. Supabase client FAILED to initialize (check logs)."
+                "message": "Flask backend is running. Supabase client FAILED to initialize (check logs).",
+                "status": "degraded",
+                "supabase": "not_connected",
+                "action_required": "Check environment variables: SUPABASE_URL and SUPABASE_KEY"
             }), 200
 
     @app.route('/api/health')
@@ -119,18 +131,42 @@ def create_app():
         return jsonify({
             "status": "healthy",
             "supabase_client": supabase_status,
-            "registered_blueprints": blueprints_registered if blueprints_registered else "None"
+            "registered_blueprints": blueprints_registered if blueprints_registered else "None",
+            "environment_check": {
+                "SUPABASE_URL": "Set" if app.config.get('SUPABASE_URL') else "Missing",
+                "SUPABASE_KEY": "Set" if app.config.get('SUPABASE_KEY') else "Missing",
+                "SECRET_KEY": "Set" if app.config.get('SECRET_KEY') else "Missing"
+            },
+            "debug_info": {
+                "supabase_initialized": hasattr(app, 'supabase') and app.supabase is not None,
+                "flask_env": os.environ.get('FLASK_ENV', 'development'),
+                "vercel_env": os.environ.get('VERCEL_ENV', 'not_vercel')
+            }
         }), 200
 
-    # --- Global Error Handler ---
+    # --- Enhanced Global Error Handler ---
     @app.errorhandler(Exception)
     def handle_exception(e):
         import traceback
+        current_app.logger.error(f"Unhandled exception: {e}")
         current_app.logger.error(traceback.format_exc())
-        return jsonify({
+        
+        # More specific error information for debugging
+        error_type = type(e).__name__
+        error_details = {
             "error": "A server error has occurred",
-            "details": str(e)
-        }), 500
+            "type": error_type,
+            "details": str(e),
+            "timestamp": logging.Formatter().formatTime(logging.LogRecord('', 0, '', 0, '', (), None)),
+        }
+        
+        # Add specific guidance for common errors
+        if "supabase" in str(e).lower():
+            error_details["guidance"] = "This appears to be a Supabase-related error. Check environment variables and Supabase configuration."
+        elif "import" in str(e).lower():
+            error_details["guidance"] = "This appears to be an import error. Check if all required dependencies are installed."
+        
+        return jsonify(error_details), 500
 
     logging.info("--- Flask app creation finished ---")
     return app

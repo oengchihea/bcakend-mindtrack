@@ -14,30 +14,39 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Get environment variables with validation
+# Get environment variables with validation - DO NOT RAISE EXCEPTIONS HERE
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("SUPABASE_KEY")
 
-# Validate environment variables
+# Log environment variable status instead of raising exceptions
 if not SUPABASE_URL:
-    raise ValueError("SUPABASE_URL environment variable is required")
+    logger.error("CRITICAL: SUPABASE_URL environment variable is missing")
+    print("❌ SUPABASE_URL environment variable is missing")
+else:
+    print(f"✅ SUPABASE_URL found: {SUPABASE_URL}")
+
 if not SUPABASE_KEY:
-    raise ValueError("SUPABASE_ANON_KEY or SUPABASE_KEY environment variable is required")
+    logger.error("CRITICAL: SUPABASE_ANON_KEY or SUPABASE_KEY environment variable is missing")
+    print("❌ SUPABASE_ANON_KEY or SUPABASE_KEY environment variable is missing")
+else:
+    print(f"✅ SUPABASE_KEY found: {'*' * 10}...{SUPABASE_KEY[-4:] if SUPABASE_KEY else 'None'}")
 
-print(f"🔧 Supabase URL: {SUPABASE_URL}")
-print(f"🔧 Supabase Key: {'*' * 10}...{SUPABASE_KEY[-4:] if SUPABASE_KEY else 'None'}")
-
-# Initialize Supabase client
+# Initialize Supabase client with graceful error handling
+supabase = None
 try:
-    # For Supabase 2.0+, create client with explicit parameters
-    supabase: Client = create_client(
-        supabase_url=SUPABASE_URL,
-        supabase_key=SUPABASE_KEY
-    )
-    print("✅ Supabase client initialized successfully")
+    if SUPABASE_URL and SUPABASE_KEY:
+        supabase: Client = create_client(
+            supabase_url=SUPABASE_URL,
+            supabase_key=SUPABASE_KEY
+        )
+        print("✅ Supabase client initialized successfully")
+    else:
+        print("❌ Cannot initialize Supabase client: Missing required environment variables")
+        supabase = None
 except Exception as e:
     print(f"❌ Failed to initialize Supabase client: {e}")
-    raise
+    logger.error(f"Failed to initialize Supabase client: {e}")
+    supabase = None
 
 auth_bp = Blueprint('auth', __name__)
 
@@ -51,14 +60,14 @@ def auth_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         from flask import current_app
-        logger.info(f"Auth required: Checking supabase client - current_app.supabase: {current_app.supabase}, global supabase: {supabase}")
+        logger.info(f"Auth required: Checking supabase client - current_app.supabase: {getattr(current_app, 'supabase', None)}, global supabase: {supabase}")
         
         # Use global supabase as fallback if current_app.supabase is None
-        supabase_client = current_app.supabase if hasattr(current_app, 'supabase') and current_app.supabase else supabase
+        supabase_client = getattr(current_app, 'supabase', None) or supabase
         
         if not supabase_client:
             logger.error("Authentication failed: No Supabase client available")
-            return jsonify({'error': 'Internal server error: No Supabase client', 'code': 'NO_SUPABASE'}), 500
+            return jsonify({'error': 'Internal server error: Database connection not available', 'code': 'NO_SUPABASE'}), 500
 
         auth_header = request.headers.get('Authorization')
         if not auth_header or not auth_header.startswith('Bearer '):
@@ -69,13 +78,15 @@ def auth_required(f):
             token = auth_header.split(' ')[1]
             
             # Set auth for the request-bound supabase client for RLS
-            supabase_client.postgrest.auth(token)
+            if hasattr(supabase_client, 'postgrest'):
+                supabase_client.postgrest.auth(token)
             
             user_response = supabase_client.auth.get_user(token)
 
             if not user_response or not user_response.user:
                 # Clear potentially invalid auth token
-                current_app.supabase.postgrest.auth(None)
+                if hasattr(current_app, 'supabase') and hasattr(current_app.supabase, 'postgrest'):
+                    current_app.supabase.postgrest.auth(None)
                 return jsonify({'error': 'Invalid or expired token', 'code': 'INVALID_TOKEN'}), 401
 
             # Store user and token in the request context `g` for use in the route
@@ -96,6 +107,9 @@ def auth_required(f):
 @auth_required
 def change_password():
     """Change user password with current password verification"""
+    if not supabase:
+        return jsonify({"error": "Database connection not available"}), 500
+        
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
 
@@ -196,6 +210,9 @@ def change_password():
 
 @auth_bp.route('/signup', methods=['POST'])
 def api_signup():
+    if not supabase:
+        return jsonify({"error": "Database connection not available"}), 500
+        
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
 
@@ -258,6 +275,9 @@ def api_signup():
 
 @auth_bp.route('/verify-otp', methods=['POST'])
 def verify_otp():
+    if not supabase:
+        return jsonify({"error": "Database connection not available"}), 500
+        
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
 
@@ -297,10 +317,20 @@ def verify_otp():
 @auth_bp.route('/login', methods=['POST'])
 def login():
     """Enhanced login endpoint with better error handling"""
+    # Check if Supabase is available
+    if not supabase:
+        return jsonify({
+            "error": "Database connection not available",
+            "details": "Supabase client not initialized. Check environment variables."
+        }), 500
+    
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
 
     data = request.get_json()
+    if not data:
+        return jsonify({"error": "Request body is required"}), 400
+        
     email = data.get('email')
     phone = data.get('phone')
     password = data.get('password')
@@ -400,6 +430,9 @@ def login():
 
 @auth_bp.route('/reset-password', methods=['POST'])
 def reset_password():
+    if not supabase:
+        return jsonify({"error": "Database connection not available"}), 500
+        
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
 
@@ -499,8 +532,8 @@ def logout():
         logout_methods_tried = []
         final_success = False
 
-        # Strategy 1: Try Supabase logout with current session
-        if auth_header and auth_header.startswith('Bearer '):
+        # Strategy 1: Try Supabase logout with current session (only if Supabase is available)
+        if supabase and auth_header and auth_header.startswith('Bearer '):
             access_token = auth_header.split(' ')[1]
             
             try:
@@ -574,6 +607,9 @@ def logout():
 @auth_bp.route('/verify-token-status', methods=['GET'])
 def verify_token_status():
     """Verify if a token is valid"""
+    if not supabase:
+        return jsonify({'valid': False, 'error': 'Database connection not available'}), 503
+        
     try:
         auth_header = request.headers.get('Authorization')
         if not auth_header or not auth_header.startswith('Bearer '):
@@ -614,6 +650,9 @@ def test_verify_token():
 @auth_bp.route('/refresh-token', methods=['POST'])
 def refresh_token():
     """Refresh access token using refresh token"""
+    if not supabase:
+        return jsonify({"error": "Database connection not available"}), 500
+        
     if not request.is_json:
         return jsonify({"error": "Request must be JSON"}), 400
 
@@ -646,5 +685,10 @@ def health_check():
         'status': 'healthy',
         'timestamp': datetime.utcnow().isoformat(),
         'service': 'auth',
-        'supabase_configured': bool(SUPABASE_URL and SUPABASE_KEY)
+        'supabase_configured': bool(SUPABASE_URL and SUPABASE_KEY),
+        'supabase_initialized': supabase is not None,
+        'environment_variables': {
+            'SUPABASE_URL': 'Set' if SUPABASE_URL else 'Missing',
+            'SUPABASE_KEY': 'Set' if SUPABASE_KEY else 'Missing'
+        }
     }), 200
