@@ -428,6 +428,44 @@ def analyze_monthly_insights(insights, user_id):
             "suggestions": []
         }
 
+@analyze_bp.route('/analyze-journal', methods=['POST'])
+@auth_required
+def analyze_journal():
+    """
+    Analyze journal content in real-time without saving to database.
+    This is used by the frontend during journal submission.
+    """
+    current_app.logger.info(f"Route /api/analyze-journal hit with method POST at {datetime.now(timezone.utc).isoformat()}")
+    
+    user_id = g.user.id
+    data = request.get_json()
+    
+    if not data:
+        current_app.logger.warning(f"No data provided in request at {datetime.now(timezone.utc).isoformat()}")
+        return jsonify({"error": "Request body is required"}), 400
+    
+    content = data.get('content', '')
+    questionnaire_data = data.get('questionnaireData', {})
+    
+    if not content:
+        current_app.logger.warning(f"No content provided for analysis at {datetime.now(timezone.utc).isoformat()}")
+        return jsonify({"error": "Content is required for analysis"}), 400
+    
+    try:
+        current_app.logger.info(f"Analyzing journal content for user {user_id} at {datetime.now(timezone.utc).isoformat()}")
+        result = analyze_with_gemini(content, questionnaire_data, user_id, max_retries=3)
+        
+        if "error" in result:
+            current_app.logger.error(f"Analysis failed with error: {result['error']} at {datetime.now(timezone.utc).isoformat()}")
+            return jsonify(result), 500
+        
+        current_app.logger.info(f"Successfully analyzed journal content for user {user_id} at {datetime.now(timezone.utc).isoformat()}")
+        return jsonify(result), 200
+    
+    except Exception as e:
+        current_app.logger.error(f"Error analyzing journal content: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
+        return jsonify({"error": f"Failed to analyze journal content: {str(e)}"}), 500
+
 @analyze_bp.route('/analyze-journal-by-date', methods=['POST'])
 @auth_required
 def analyze_journal_by_date():
