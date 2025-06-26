@@ -454,29 +454,90 @@ def analyze_journal():
     
     if not data:
         current_app.logger.warning(f"No data provided in request at {datetime.now(timezone.utc).isoformat()}")
-        return jsonify({"error": "Request body is required"}), 400
+        return jsonify({
+            "error": "Request body is required",
+            "fallback": True,
+            "sentiment": "neutral",
+            "score": 5,
+            "themes": ["unknown"],
+            "insights": "No content provided for analysis.",
+            "suggestions": [
+                "Try writing about your current feelings",
+                "Share what's on your mind",
+                "Reflect on your day"
+            ],
+            "emoji": "😐"
+        }), 400
     
     content = data.get('content', '')
     questionnaire_data = data.get('questionnaireData', {})
     
     if not content:
         current_app.logger.warning(f"No content provided for analysis at {datetime.now(timezone.utc).isoformat()}")
-        return jsonify({"error": "Content is required for analysis"}), 400
+        return jsonify({
+            "error": "Content is required for analysis",
+            "fallback": True,
+            "sentiment": "neutral",
+            "score": 5,
+            "themes": ["unknown"],
+            "insights": "No journal content provided.",
+            "suggestions": [
+                "Start by writing about your day",
+                "Share what you're feeling right now",
+                "Describe a moment that stood out"
+            ],
+            "emoji": "😐"
+        }), 400
     
     try:
         current_app.logger.info(f"Analyzing journal content for user {user_id} at {datetime.now(timezone.utc).isoformat()}")
-        result = analyze_with_gemini(content, questionnaire_data, user_id, max_retries=3)
         
-        if "error" in result:
+        # First try with Gemini
+        result = analyze_with_gemini(content, questionnaire_data, user_id, max_retries=2)
+        
+        # Check for quota exceeded error
+        if "error" in result and ("quota" in result["error"].lower() or "429" in result["error"]):
+            current_app.logger.warning(f"Gemini quota exceeded, using fallback analysis for user {user_id}")
+            
+            # Generate fallback analysis
+            fallback_result = generate_fallback_analysis(content, questionnaire_data, user_id)
+            
+            # Add quota warning to the response
+            fallback_result.update({
+                "quota_exceeded": True,
+                "quota_message": "AI analysis temporarily unavailable due to quota limits. Using simplified analysis.",
+                "retry_after": "Please try again in a few minutes."
+            })
+            
+            return jsonify(fallback_result), 200
+        
+        # Check for other errors
+        elif "error" in result:
             current_app.logger.error(f"Analysis failed with error: {result['error']} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify(result), 500
+            
+            # Generate fallback analysis
+            fallback_result = generate_fallback_analysis(content, questionnaire_data, user_id)
+            fallback_result.update({
+                "original_error": result["error"],
+                "fallback_message": "Using simplified analysis due to temporary AI service disruption."
+            })
+            
+            return jsonify(fallback_result), 200
         
         current_app.logger.info(f"Successfully analyzed journal content for user {user_id} at {datetime.now(timezone.utc).isoformat()}")
         return jsonify(result), 200
     
     except Exception as e:
         current_app.logger.error(f"Error analyzing journal content: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
-        return jsonify({"error": f"Failed to analyze journal content: {str(e)}"}), 500
+        
+        # Generate fallback analysis
+        fallback_result = generate_fallback_analysis(content, questionnaire_data, user_id)
+        fallback_result.update({
+            "error": f"An unexpected error occurred: {str(e)}",
+            "fallback_message": "Using simplified analysis due to technical difficulties."
+        })
+        
+        return jsonify(fallback_result), 200
 
 @analyze_bp.route('/analyze-journal-by-date', methods=['POST'])
 @auth_required

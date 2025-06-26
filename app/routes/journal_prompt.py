@@ -68,55 +68,106 @@ GUIDED_PROMPTS = [
 ]
 
 MOOD_PROMPTS = {
-    "happy": [
-        "What made you feel so happy today?",
-        "How can you share this happiness with others?",
-        "What would you like to remember about this joyful moment?",
-        "What's something that always brings a smile to your face?",
-        "How can you create more moments like this?",
-    ],
-    "sad": [
-        "What's weighing on your mind right now?",
-        "How can you be kind to yourself during this difficult time?",
-        "What would help you feel better right now?",
-        "What's something that usually comforts you?",
-        "How can you practice self-compassion today?",
-    ],
-    "anxious": [
-        "What's causing you to feel anxious?",
-        "What coping strategies work best for you?",
-        "How can you practice self-compassion right now?",
-        "What would help you feel more grounded?",
-        "What's one small step you can take to reduce this anxiety?",
-    ],
-    "excited": [
-        "What are you excited about?",
-        "How can you channel this energy positively?",
-        "What's the next step towards your excitement?",
-        "How can you share this excitement with others?",
-        "What does this excitement tell you about what matters to you?",
-    ],
-    "tired": [
-        "What drained your energy today?",
-        "How can you rest and recharge?",
-        "What would help you feel more energized?",
-        "What's something that helps you feel refreshed?",
-        "How can you prioritize rest without feeling guilty?",
-    ],
-    "frustrated": [
-        "What's frustrating you right now?",
-        "How can you address this frustration constructively?",
-        "What would help you feel more at peace?",
-        "What's a different perspective you could consider?",
-        "How can you channel this frustration into positive action?",
-    ],
-    "calm": [
-        "What's contributing to your sense of calm?",
-        "How can you maintain this peaceful state?",
-        "What does this calmness teach you about yourself?",
-        "How can you share this calm energy with others?",
-        "What practices help you stay centered?",
-    ]
+    "happy": {
+        "color": "#FFD700",  # Gold
+        "prompts": [
+            "What specific moment today made your heart feel light and joyful?",
+            "How did you share your happiness with others today?",
+            "What accomplishment, big or small, brought you this joy?",
+            "Describe the physical sensations of your happiness right now.",
+            "What positive changes in your life are making you feel this way?"
+        ]
+    },
+    "sad": {
+        "color": "#4682B4",  # Steel Blue
+        "prompts": [
+            "What specific situation is causing these heavy feelings?",
+            "How are you physically experiencing this sadness?",
+            "What kind of support would be most helpful right now?",
+            "When did you start noticing these feelings today?",
+            "What usually helps lift your spirits when you feel this way?"
+        ]
+    },
+    "anxious": {
+        "color": "#9370DB",  # Medium Purple
+        "prompts": [
+            "Can you pinpoint what's triggering your anxiety right now?",
+            "Where in your body do you feel this anxiety most strongly?",
+            "What grounding techniques have helped you before?",
+            "What's the worst-case scenario you're worried about?",
+            "What would help you feel more secure in this moment?"
+        ]
+    },
+    "excited": {
+        "color": "#FFA500",  # Orange
+        "prompts": [
+            "What future event is making your heart race with anticipation?",
+            "How is this excitement affecting your energy levels?",
+            "What creative ideas are flowing from this excitement?",
+            "How can you channel this positive energy productively?",
+            "What does this excitement tell you about your passions?"
+        ]
+    },
+    "tired": {
+        "color": "#778899",  # Light Slate Gray
+        "prompts": [
+            "What activities today consumed most of your energy?",
+            "How is this fatigue affecting your thoughts and emotions?",
+            "What type of rest do you need most right now?",
+            "When did you last feel truly refreshed?",
+            "What small steps could help restore your energy?"
+        ]
+    },
+    "frustrated": {
+        "color": "#CD5C5C",  # Indian Red
+        "prompts": [
+            "What specific situation is causing this frustration?",
+            "How is this frustration manifesting in your body?",
+            "What aspects of this situation are within your control?",
+            "How could you approach this differently?",
+            "What would resolution look like for you?"
+        ]
+    },
+    "calm": {
+        "color": "#98FB98",  # Pale Green
+        "prompts": [
+            "What helped create this sense of peace today?",
+            "How does this calmness feel in your body?",
+            "What practices helped you reach this state?",
+            "How can you maintain this tranquility?",
+            "What insights come to you in this peaceful state?"
+        ]
+    },
+    "overwhelmed": {
+        "color": "#B22222",  # Fire Brick
+        "prompts": [
+            "What responsibilities are weighing heaviest on you?",
+            "How is this feeling of being overwhelmed showing up physically?",
+            "What tasks could you delegate or postpone?",
+            "When did you last take a real break?",
+            "What small step could help reduce this pressure?"
+        ]
+    },
+    "grateful": {
+        "color": "#DDA0DD",  # Plum
+        "prompts": [
+            "What unexpected blessing caught your attention today?",
+            "Who has positively impacted your life recently?",
+            "What simple pleasure are you most thankful for?",
+            "How has gratitude shifted your perspective?",
+            "What personal growth are you grateful for?"
+        ]
+    },
+    "hopeful": {
+        "color": "#87CEEB",  # Sky Blue
+        "prompts": [
+            "What positive change are you looking forward to?",
+            "What small signs of progress do you see?",
+            "How is this hope influencing your actions?",
+            "What dreams feel more possible now?",
+            "Who or what has inspired this hope?"
+        ]
+    }
 }
 
 TOPIC_PROMPTS = {
@@ -191,19 +242,44 @@ def generate_prompts_with_ai(prompt_type, count, mood=None, topic=None):
             ]
         )
 
-        # Build the instruction based on prompt type
+        # Build the instruction based on prompt type and mood
         if prompt_type == "mood" and mood:
-            instruction = f"""Generate {count} empathetic, radically distinct, and deeply insightful journal questions for someone feeling "{mood}", for the "Mindtrack" app. Each question must help them explore this specific mood "{mood}" from a genuinely unique dimensional perspective. Ensure maximum variety in meaning and focus with every new set of prompts.
+            mood_color = MOOD_PROMPTS.get(mood.lower(), {}).get("color", "#808080")  # Default to gray if no color found
+            instruction = f"""Generate {count} empathetic, deeply personal journal questions for someone feeling "{mood}". Each question should:
+1. Help explore the specific emotion of "{mood}" from a unique perspective
+2. Be colored with the hex code {mood_color} in the UI
+3. Focus on physical sensations, thoughts, and emotional experiences
+4. Be specific and direct about the feeling
+5. Encourage detailed self-reflection
 
-Return the prompts as a JSON object with a 'prompts' array in this exact format: {{"prompts": ["prompt1", "prompt2", "prompt3"]}}. DO NOT include any text before or after the JSON."""
+Return the prompts as a JSON object with 'prompts' and 'colors' arrays:
+{{"prompts": ["prompt1", "prompt2"], "colors": ["{mood_color}", "{mood_color}"]}}
+
+DO NOT include any text before or after the JSON."""
         elif prompt_type == "topic" and topic:
-            instruction = f"""Generate {count} radically distinct and deeply insightful journal questions about "{topic}" for the "Mindtrack" app. Each question must encourage focused reflection on how this topic uniquely influences the user's current mood, thoughts, and feelings from a different dimensional perspective each time.
+            instruction = f"""Generate {count} focused journal questions about "{topic}" that:
+1. Connect the topic to current emotional state
+2. Encourage detailed self-reflection
+3. Explore personal growth and insights
+4. Consider both challenges and opportunities
+5. Prompt actionable self-discovery
 
-Return the prompts as a JSON object with a 'prompts' array in this exact format: {{"prompts": ["prompt1", "prompt2", "prompt3"]}}. DO NOT include any text before or after the JSON."""
+Return the prompts as a JSON object with a 'prompts' array:
+{{"prompts": ["prompt1", "prompt2"]}}
+
+DO NOT include any text before or after the JSON."""
         else:
-            instruction = f"""Generate {count} radically distinct and deeply insightful journal questions for the "Mindtrack" app. Each question must offer a unique dimensional exploration of the user's current emotional landscape, ensuring maximum variety in meaning and focus with every new set of prompts.
+            instruction = """Generate {count} insightful journal questions that:
+1. Explore current emotional state
+2. Encourage mindful self-reflection
+3. Focus on personal growth
+4. Consider both challenges and achievements
+5. Prompt actionable insights
 
-Return the prompts as a JSON object with a 'prompts' array in this exact format: {{"prompts": ["prompt1", "prompt2", "prompt3"]}}. DO NOT include any text before or after the JSON."""
+Return the prompts as a JSON object with a 'prompts' array:
+{{"prompts": ["prompt1", "prompt2"]}}
+
+DO NOT include any text before or after the JSON."""
 
         print(f"🎯 Sending request to Gemini AI...")
         current_app.logger.info(f"🎯 Sending request to Gemini AI with instruction length: {len(instruction)}")
@@ -243,7 +319,7 @@ def generate_fallback_prompts(prompt_type, count, mood=None, topic=None):
         available_prompts = []
         
         if mood_lower in MOOD_PROMPTS:
-            available_prompts.extend(MOOD_PROMPTS[mood_lower])
+            available_prompts.extend(MOOD_PROMPTS[mood_lower]['prompts'])
         available_prompts.extend(GUIDED_PROMPTS)
         
         random.shuffle(available_prompts)
