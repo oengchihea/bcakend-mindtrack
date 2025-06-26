@@ -17,17 +17,19 @@ def create_app():
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
     app.config['SUPABASE_URL'] = os.environ.get('SUPABASE_URL')
     
-    # FIXED: Support multiple environment variable names
+    # FIXED: Support ALL environment variable names for Supabase key
     app.config['SUPABASE_KEY'] = (
         os.environ.get('SUPABASE_ANON_KEY') or 
         os.environ.get('SUPABASE_KEY') or
-        os.environ.get('SUPABASE_ROLE_SERVICE')
+        os.environ.get('SUPABASE_ROLE_SERVICE') or
+        os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
     )
     app.config['SUPABASE_ANON_KEY'] = app.config['SUPABASE_KEY']  # For compatibility
     app.config['SUPABASE_SERVICE_ROLE_KEY'] = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or app.config['SUPABASE_KEY']
 
     logging.info(f"SUPABASE_URL Loaded: {'YES' if app.config['SUPABASE_URL'] else 'NO - CRITICAL'}")
     logging.info(f"SUPABASE_KEY Loaded: {'YES' if app.config['SUPABASE_KEY'] else 'NO - CRITICAL'}")
+    logging.info(f"SUPABASE_SERVICE_ROLE_KEY Loaded: {'YES' if app.config['SUPABASE_SERVICE_ROLE_KEY'] else 'NO - FALLBACK'}")
 
     # Initialize Supabase client within application context - GRACEFUL HANDLING
     with app.app_context():
@@ -35,7 +37,7 @@ def create_app():
             logging.error("CRITICAL ERROR: Missing Supabase URL or Key in environment variables.")
             logging.error("Required environment variables:")
             logging.error("- SUPABASE_URL (your Supabase project URL)")
-            logging.error("- SUPABASE_ANON_KEY (your Supabase anon key)")
+            logging.error("- SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY (your Supabase key)")
             app.supabase = None
             current_app.config['SUPABASE_CLIENT'] = None
         else:
@@ -63,6 +65,11 @@ def create_app():
         app.register_blueprint(journal_bp, url_prefix='/api')
         logging.info("Successfully registered 'journal_bp' blueprint with /api prefix.")
 
+        # Register Journal Prompt Blueprint (MISSING)
+        from .routes.journal_prompt import journal_prompt_bp
+        app.register_blueprint(journal_prompt_bp, url_prefix='/api')
+        logging.info("Successfully registered 'journal_prompt_bp' blueprint with /api prefix.")
+
         # Register Mood Blueprint
         from .routes.mood import mood_bp
         app.register_blueprint(mood_bp, url_prefix='/api')
@@ -88,10 +95,15 @@ def create_app():
         app.register_blueprint(analyze_bp, url_prefix='/api')
         logging.info("Successfully registered 'analyze_bp' blueprint with /api prefix.")
 
-        # Register Events Blueprint
+        # Register Events Blueprint (has its own /api/events prefix)
         from .routes.events import events_bp
         app.register_blueprint(events_bp)  # This already has /api prefix
         logging.info("Successfully registered 'events_bp' blueprint.")
+
+        # Register Main Blueprint
+        from .routes.main import main_bp
+        app.register_blueprint(main_bp, url_prefix='/api')
+        logging.info("Successfully registered 'main_bp' blueprint with /api prefix.")
 
     except ImportError as e:
         logging.error(f"CRITICAL ERROR: Failed to import or register blueprint: {e}", exc_info=True)

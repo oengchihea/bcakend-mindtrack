@@ -19,7 +19,8 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = (
     os.environ.get("SUPABASE_ANON_KEY") or 
     os.environ.get("SUPABASE_KEY") or 
-    os.environ.get("SUPABASE_ROLE_SERVICE")
+    os.environ.get("SUPABASE_ROLE_SERVICE") or
+    os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
 )
 
 # Log environment variable status instead of raising exceptions
@@ -30,8 +31,8 @@ else:
     print(f"✅ SUPABASE_URL found: {SUPABASE_URL}")
 
 if not SUPABASE_KEY:
-    logger.error("CRITICAL: SUPABASE_ANON_KEY, SUPABASE_KEY, or SUPABASE_ROLE_SERVICE environment variable is missing")
-    print("❌ SUPABASE_ANON_KEY, SUPABASE_KEY, or SUPABASE_ROLE_SERVICE environment variable is missing")
+    logger.error("CRITICAL: SUPABASE_ANON_KEY, SUPABASE_KEY, SUPABASE_ROLE_SERVICE, or SUPABASE_SERVICE_ROLE_KEY environment variable is missing")
+    print("❌ SUPABASE_ANON_KEY, SUPABASE_KEY, SUPABASE_ROLE_SERVICE, or SUPABASE_SERVICE_ROLE_KEY environment variable is missing")
 else:
     print(f"✅ SUPABASE_KEY found: {'*' * 10}...{SUPABASE_KEY[-4:] if SUPABASE_KEY else 'None'}")
 
