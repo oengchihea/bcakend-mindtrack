@@ -160,6 +160,29 @@ def create_application():
                 'type': type(e).__name__
             }), 500
     
+    # Routes listing for debugging
+    @app.route('/api/routes', methods=['GET'])
+    def list_routes():
+        try:
+            routes = []
+            for rule in app.url_map.iter_rules():
+                routes.append({
+                    'endpoint': rule.endpoint,
+                    'methods': list(rule.methods),
+                    'rule': str(rule),
+                    'subdomain': rule.subdomain
+                })
+            return jsonify({
+                'routes': routes,
+                'total_routes': len(routes),
+                'message': 'All registered routes'
+            }), 200
+        except Exception as e:
+            return jsonify({
+                'error': str(e),
+                'type': type(e).__name__
+            }), 500
+    
     # Global error handler
     @app.errorhandler(Exception)
     def handle_exception(e):
