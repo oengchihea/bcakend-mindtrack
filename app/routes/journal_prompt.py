@@ -10,15 +10,31 @@ from dotenv import load_dotenv
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+# Debug logging for API key
+if GEMINI_API_KEY:
+    print(f"✅ GEMINI_API_KEY found: {GEMINI_API_KEY[:10]}...{GEMINI_API_KEY[-4:]}")
+    logging.info(f"✅ GEMINI_API_KEY configured: {GEMINI_API_KEY[:10]}...")
+else:
+    print("❌ GEMINI_API_KEY not found in environment variables")
+    logging.error("❌ GEMINI_API_KEY not found in environment variables")
+
 # Try to import google.generativeai, but make it optional
 try:
     import google.generativeai as genai
     if GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
-    GEMINI_AVAILABLE = True
-except ImportError:
+        GEMINI_AVAILABLE = True
+        print("✅ Gemini AI configured successfully")
+        logging.info("✅ Gemini AI configured successfully")
+    else:
+        GEMINI_AVAILABLE = False
+        print("❌ Gemini AI not available - missing API key")
+        logging.warning("❌ Gemini AI not available - missing API key")
+except ImportError as e:
     GEMINI_AVAILABLE = False
     genai = None
+    print(f"❌ google-generativeai import failed: {e}")
+    logging.error(f"❌ google-generativeai import failed: {e}")
 
 journal_prompt_bp = Blueprint('journal_prompt_bp', __name__)
 MODEL_NAME = "gemini-1.5-flash-latest"
@@ -143,11 +159,22 @@ TOPIC_PROMPTS = {
 
 def generate_prompts_with_ai(prompt_type, count, mood=None, topic=None):
     """Generate prompts using Gemini AI if available, otherwise use fallback"""
+    print(f"🔍 AI Generation Request:")
+    print(f"   GEMINI_AVAILABLE: {GEMINI_AVAILABLE}")
+    print(f"   GEMINI_API_KEY present: {'✅' if GEMINI_API_KEY else '❌'}")
+    print(f"   Prompt type: {prompt_type}, Count: {count}, Mood: {mood}, Topic: {topic}")
+    
+    current_app.logger.info(f"🔍 AI Generation - Available: {GEMINI_AVAILABLE}, API Key: {'Present' if GEMINI_API_KEY else 'Missing'}")
+    
     if not GEMINI_AVAILABLE or not GEMINI_API_KEY:
+        print("❌ AI generation not available - using fallback prompts")
         current_app.logger.warning("GEMINI_API_KEY not available or google-generativeai not installed, using fallback prompts")
         return generate_fallback_prompts(prompt_type, count, mood, topic)
     
     try:
+        print(f"🚀 Initializing Gemini model: {MODEL_NAME}")
+        current_app.logger.info(f"🚀 Initializing Gemini model: {MODEL_NAME}")
+        
         model = genai.GenerativeModel(
             model_name=MODEL_NAME,
             generation_config={
@@ -178,8 +205,14 @@ Return the prompts as a JSON object with a 'prompts' array in this exact format:
 
 Return the prompts as a JSON object with a 'prompts' array in this exact format: {{"prompts": ["prompt1", "prompt2", "prompt3"]}}. DO NOT include any text before or after the JSON."""
 
+        print(f"🎯 Sending request to Gemini AI...")
+        current_app.logger.info(f"🎯 Sending request to Gemini AI with instruction length: {len(instruction)}")
+        
         response = model.generate_content(instruction)
         json_string = response.text.strip()
+        
+        print(f"📨 Gemini response received: {len(json_string)} characters")
+        current_app.logger.info(f"📨 Gemini response received: {json_string[:200]}...")
         
         # Clean and parse JSON
         json_string = json_string.replace("```json\n", "").replace("```", "").strip()
@@ -188,14 +221,17 @@ Return the prompts as a JSON object with a 'prompts' array in this exact format:
 
         result = json.loads(json_string)
         if result.get('prompts') and isinstance(result['prompts'], list) and len(result['prompts']) > 0:
-            current_app.logger.info(f"Successfully generated {len(result['prompts'])} AI prompts")
+            print(f"✅ Successfully generated {len(result['prompts'])} AI prompts")
+            current_app.logger.info(f"✅ Successfully generated {len(result['prompts'])} AI prompts")
             return result['prompts']
         else:
+            print("❌ Invalid AI response format, using fallback")
             current_app.logger.warning("Invalid AI response format, using fallback")
             return generate_fallback_prompts(prompt_type, count, mood, topic)
             
     except Exception as e:
-        current_app.logger.error(f"Error generating AI prompts: {e}")
+        print(f"❌ AI generation failed: {str(e)}")
+        current_app.logger.error(f"❌ Error generating AI prompts: {e}", exc_info=True)
         return generate_fallback_prompts(prompt_type, count, mood, topic)
 
 def generate_fallback_prompts(prompt_type, count, mood=None, topic=None):
