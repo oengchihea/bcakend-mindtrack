@@ -15,14 +15,115 @@ from google.api_core import exceptions
 # Load environment variables
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable is not set")
-genai.configure(api_key=GEMINI_API_KEY)
+
+# Try to configure Gemini AI, but make it optional
+try:
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        GEMINI_AVAILABLE = True
+    else:
+        GEMINI_AVAILABLE = False
+        logging.warning("GEMINI_API_KEY not available, using fallback analysis")
+except Exception as e:
+    logging.error(f"Failed to configure Gemini AI: {e}")
+    GEMINI_AVAILABLE = False
 
 analyze_bp = Blueprint('analyze_bp', __name__)
 MODEL_NAME = "gemini-1.5-flash-latest"
 
+def generate_fallback_analysis(content, questionnaire_data, user_id):
+    """Generate fallback analysis when Gemini AI is not available"""
+    try:
+        # Simple keyword-based sentiment analysis
+        content_lower = (content or "").lower()
+        positive_words = ["happy", "good", "great", "excellent", "amazing", "wonderful", "grateful", "thankful", "joy", "love", "excited", "proud"]
+        negative_words = ["sad", "bad", "terrible", "awful", "angry", "frustrated", "worried", "anxious", "stressed", "upset", "disappointed"]
+        
+        positive_count = sum(1 for word in positive_words if word in content_lower)
+        negative_count = sum(1 for word in negative_words if word in content_lower)
+        
+        if positive_count > negative_count:
+            sentiment = "positive"
+            score = min(8, 5 + positive_count)
+        elif negative_count > positive_count:
+            sentiment = "negative" 
+            score = max(2, 5 - negative_count)
+        else:
+            sentiment = "neutral"
+            score = 5
+            
+        # Extract themes based on content
+        themes = []
+        if any(word in content_lower for word in ["work", "job", "office", "meeting"]):
+            themes.append("work")
+        if any(word in content_lower for word in ["stress", "anxious", "worried", "pressure"]):
+            themes.append("stress")
+        if any(word in content_lower for word in ["grateful", "thankful", "appreciate", "blessing"]):
+            themes.append("gratitude")
+        if any(word in content_lower for word in ["family", "friend", "relationship", "love"]):
+            themes.append("relationships")
+        if any(word in content_lower for word in ["tired", "exhausted", "sleep", "energy"]):
+            themes.append("energy")
+            
+        if not themes:
+            themes = ["reflection"]
+            
+        # Generate appropriate insights and suggestions
+        if sentiment == "positive":
+            insights = "Your journal entry reflects a positive mindset and emotional well-being."
+            suggestions = [
+                "Continue practicing gratitude to maintain your positive outlook.",
+                "Share your positive energy with others around you.",
+                "Reflect on what specifically contributed to these good feelings."
+            ]
+            emoji = "😊"
+        elif sentiment == "negative":
+            insights = "Your journal entry indicates some challenges or difficult emotions."
+            suggestions = [
+                "Consider talking to someone you trust about these feelings.",
+                "Practice self-care activities that usually help you feel better.",
+                "Remember that difficult emotions are temporary and will pass."
+            ]
+            emoji = "😔"
+        else:
+            insights = "Your journal entry shows a balanced emotional state."
+            suggestions = [
+                "Take time to reflect on what brings you joy and fulfillment.",
+                "Consider setting small goals to add more positive experiences to your day.",
+                "Practice mindfulness to stay present and aware of your emotions."
+            ]
+            emoji = "😐"
+            
+        return {
+            "sentiment": sentiment,
+            "score": score,
+            "themes": themes,
+            "insights": insights,
+            "suggestions": suggestions,
+            "emoji": emoji,
+            "fallback": True,
+            "message": "Analysis generated using fallback method (Gemini AI unavailable)"
+        }
+        
+    except Exception as e:
+        logging.error(f"Error in fallback analysis: {e}")
+        return {
+            "sentiment": "neutral",
+            "score": 5,
+            "themes": ["unknown"],
+            "insights": "Fallback analysis failed, default values applied.",
+            "suggestions": ["Try journaling again later.", "Reflect on your day.", "Practice self-care."],
+            "emoji": "😐",
+            "fallback": True,
+            "error": f"Fallback analysis error: {str(e)}"
+        }
+
 def analyze_with_gemini(content, questionnaire_data, user_id, max_retries=3):
+    # Check if Gemini is available
+    if not GEMINI_AVAILABLE:
+        current_app.logger.warning(f"Gemini AI not available for user {user_id}, using fallback analysis")
+        return generate_fallback_analysis(content, questionnaire_data, user_id)
+    
     attempt = 0
     while attempt < max_retries:
         try:
@@ -62,7 +163,7 @@ Example:
 {{
   "sentiment": "positive",
   "score": 8,
-  "themes": ["gratitude", "joy"],
+  "themes": ["stress", "gratitude"],
   "insights": "Your journal reflects a positive mood with strong themes of gratitude.",
   "suggestions": [
     "Continue noting things you're grateful for to maintain positivity.",
