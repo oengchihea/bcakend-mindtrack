@@ -1,43 +1,41 @@
-import logging
+from datetime import datetime, timezone
 import os
+import logging
 from flask import Flask, jsonify, current_app
 from flask_cors import CORS
 from supabase import create_client
 from dotenv import load_dotenv
 
-# Configure logging for Vercel
+# Configure logging for production
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
 
 def create_app():
-    logging.info("--- Starting Flask app creation ---")
-    load_dotenv()
+    """
+    Create and configure the Flask application.
+
+    Returns:
+        Flask: Configured Flask application instance.
+    """
     app = Flask(__name__)
+    load_dotenv()
 
-    # --- Environment Variable Check - FIXED ---
-    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY')
-    app.config['SUPABASE_URL'] = os.environ.get('SUPABASE_URL')
-    
-    # FIXED: Support ALL environment variable names for Supabase key
+    # Configure environment variables
+    app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
+    app.config['SUPABASE_URL'] = os.getenv('SUPABASE_URL')
     app.config['SUPABASE_KEY'] = (
-        os.environ.get('SUPABASE_ANON_KEY') or 
-        os.environ.get('SUPABASE_KEY') or
-        os.environ.get('SUPABASE_ROLE_SERVICE') or
-        os.environ.get('SUPABASE_SERVICE_ROLE_KEY')
+        os.getenv('SUPABASE_ANON_KEY') or
+        os.getenv('SUPABASE_KEY') or
+        os.getenv('SUPABASE_ROLE_SERVICE') or
+        os.getenv('SUPABASE_SERVICE_ROLE_KEY')
     )
-    app.config['SUPABASE_ANON_KEY'] = app.config['SUPABASE_KEY']  # For compatibility
-    app.config['SUPABASE_SERVICE_ROLE_KEY'] = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or app.config['SUPABASE_KEY']
+    app.config['SUPABASE_ANON_KEY'] = app.config['SUPABASE_KEY']
+    app.config['SUPABASE_SERVICE_ROLE_KEY'] = os.getenv('SUPABASE_SERVICE_ROLE_KEY') or app.config['SUPABASE_KEY']
 
-    logging.info(f"SUPABASE_URL Loaded: {'YES' if app.config['SUPABASE_URL'] else 'NO - CRITICAL'}")
-    logging.info(f"SUPABASE_KEY Loaded: {'YES' if app.config['SUPABASE_KEY'] else 'NO - CRITICAL'}")
-    logging.info(f"SUPABASE_SERVICE_ROLE_KEY Loaded: {'YES' if app.config['SUPABASE_SERVICE_ROLE_KEY'] else 'NO - FALLBACK'}")
-
-    # Initialize Supabase client within application context - GRACEFUL HANDLING
+    # Initialize Supabase client
     with app.app_context():
         if not all([app.config['SUPABASE_URL'], app.config['SUPABASE_KEY']]):
-            logging.error("CRITICAL ERROR: Missing Supabase URL or Key in environment variables.")
-            logging.error("Required environment variables:")
-            logging.error("- SUPABASE_URL (your Supabase project URL)")
-            logging.error("- SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY (your Supabase key)")
+            logger.error("Missing Supabase URL or Key in environment variables")
             app.supabase = None
             current_app.config['SUPABASE_CLIENT'] = None
         else:
@@ -45,133 +43,89 @@ def create_app():
                 supabase_client = create_client(app.config['SUPABASE_URL'], app.config['SUPABASE_KEY'])
                 app.supabase = supabase_client
                 current_app.config['SUPABASE_CLIENT'] = supabase_client
-                logging.info("Supabase client initialized successfully with service key and stored in config.")
             except Exception as e:
-                logging.error(f"CRITICAL ERROR: Failed to initialize Supabase client with service key: {e}", exc_info=True)
-                logging.error("This usually means:")
-                logging.error("- Invalid SUPABASE_URL or SUPABASE_ANON_KEY")
-                logging.error("- Network connectivity issues")
-                logging.error("- Supabase project is not accessible")
+                logger.error(f"Failed to initialize Supabase client: {e}")
                 app.supabase = None
                 current_app.config['SUPABASE_CLIENT'] = None
 
-    # --- CORS and Blueprint Registration ---
+    # Configure CORS
     CORS(app, resources={r"/api/*": {"origins": "*"}})
-    logging.info("CORS configured for /api/*.")
 
+    # Register blueprints
     try:
-        # Register Journal Blueprint with Supabase client
         from .routes.journal import journal_bp
         app.register_blueprint(journal_bp, url_prefix='/api')
-        logging.info("Successfully registered 'journal_bp' blueprint with /api prefix.")
 
-        # Register Journal Prompt Blueprint (MISSING)
         from .routes.journal_prompt import journal_prompt_bp
         app.register_blueprint(journal_prompt_bp, url_prefix='/api')
-        logging.info("Successfully registered 'journal_prompt_bp' blueprint with /api prefix.")
 
-        # Register Mood Blueprint
         from .routes.mood import mood_bp
         app.register_blueprint(mood_bp, url_prefix='/api')
-        logging.info("Successfully registered 'mood_bp' blueprint with /api prefix.")
 
-        # Register Auth Blueprint
         from .routes.auth import auth_bp
         app.register_blueprint(auth_bp, url_prefix='/api')
-        logging.info("Successfully registered 'auth_bp' blueprint with /api prefix.")
 
-        # Register User Blueprint
         from .routes.user import user_bp
         app.register_blueprint(user_bp, url_prefix='/api')
-        logging.info("Successfully registered 'user_bp' blueprint with /api prefix.")
 
-        # Register Posts Blueprint
         from .routes.posts import posts_bp
         app.register_blueprint(posts_bp, url_prefix='/api')
-        logging.info("Successfully registered 'posts_bp' blueprint with /api prefix.")
 
-        # Register Analyze Journal Blueprint
         from .routes.analyze_journal import analyze_bp
         app.register_blueprint(analyze_bp, url_prefix='/api')
-        logging.info("Successfully registered 'analyze_bp' blueprint with /api prefix.")
 
-        # Register Events Blueprint (has its own /api/events prefix)
         from .routes.events import events_bp
-        app.register_blueprint(events_bp)  # This already has /api prefix
-        logging.info("Successfully registered 'events_bp' blueprint.")
+        app.register_blueprint(events_bp)
 
-        # Register Main Blueprint
         from .routes.main import main_bp
         app.register_blueprint(main_bp, url_prefix='/api')
-        logging.info("Successfully registered 'main_bp' blueprint with /api prefix.")
-
     except ImportError as e:
-        logging.error(f"CRITICAL ERROR: Failed to import or register blueprint: {e}", exc_info=True)
+        logger.error(f"Failed to register blueprint: {e}")
 
-    # --- Health Check and Root Routes ---
     @app.route('/')
     def root():
-        if hasattr(app, 'supabase') and app.supabase:
-            return jsonify({
-                "message": "Flask backend is running. Supabase client appears to be initialized.",
-                "status": "ok",
-                "supabase": "connected"
-            }), 200
-        else:
-            return jsonify({
-                "message": "Flask backend is running. Supabase client FAILED to initialize (check logs).",
-                "status": "degraded",
-                "supabase": "not_connected",
-                "action_required": "Check environment variables: SUPABASE_URL and SUPABASE_ANON_KEY"
-            }), 200
+        """Root endpoint for the Flask application."""
+        status = "ok" if hasattr(app, 'supabase') and app.supabase else "degraded"
+        supabase_status = "connected" if status == "ok" else "not_connected"
+        return jsonify({
+            "message": f"Flask backend is running. Supabase client {'is initialized' if status == 'ok' else 'failed to initialize'}.",
+            "status": status,
+            "supabase": supabase_status
+        }), 200
 
     @app.route('/api/health')
     def health_check():
-        supabase_status = "OK"
-        if not hasattr(app, 'supabase') or not app.supabase:
-            supabase_status = "Error: Supabase client not initialized"
-        
+        """Health check endpoint for the Flask application."""
+        supabase_status = "connected" if hasattr(app, 'supabase') and app.supabase else "not_connected"
         blueprints_registered = list(app.blueprints.keys())
-
         return jsonify({
-            "status": "healthy",
+            "status": "healthy" if supabase_status == "connected" else "degraded",
             "supabase_client": supabase_status,
-            "registered_blueprints": blueprints_registered if blueprints_registered else "None",
+            "registered_blueprints": blueprints_registered or ["None"],
             "environment_check": {
-                "SUPABASE_URL": "Set" if app.config.get('SUPABASE_URL') else "Missing",
-                "SUPABASE_KEY": "Set" if app.config.get('SUPABASE_KEY') else "Missing",
-                "SECRET_KEY": "Set" if app.config.get('SECRET_KEY') else "Missing"
-            },
-            "debug_info": {
-                "supabase_initialized": hasattr(app, 'supabase') and app.supabase is not None,
-                "flask_env": os.environ.get('FLASK_ENV', 'development'),
-                "vercel_env": os.environ.get('VERCEL_ENV', 'not_vercel')
+                "SUPABASE_URL": "set" if app.config.get('SUPABASE_URL') else "missing",
+                "SUPABASE_KEY": "set" if app.config.get('SUPABASE_KEY') else "missing",
+                "SECRET_KEY": "set" if app.config.get('SECRET_KEY') else "missing"
             }
         }), 200
 
-    # --- Enhanced Global Error Handler ---
     @app.errorhandler(Exception)
     def handle_exception(e):
-        import traceback
-        current_app.logger.error(f"Unhandled exception: {e}")
-        current_app.logger.error(traceback.format_exc())
-        
-        # More specific error information for debugging
-        error_type = type(e).__name__
-        error_details = {
-            "error": "A server error has occurred",
-            "type": error_type,
-            "details": str(e),
-            "timestamp": logging.Formatter().formatTime(logging.LogRecord('', 0, '', 0, '', (), None)),
-        }
-        
-        # Add specific guidance for common errors
-        if "supabase" in str(e).lower():
-            error_details["guidance"] = "This appears to be a Supabase-related error. Check environment variables and Supabase configuration."
-        elif "import" in str(e).lower():
-            error_details["guidance"] = "This appears to be an import error. Check if all required dependencies are installed."
-        
-        return jsonify(error_details), 500
+        """
+        Global error handler for unhandled exceptions.
 
-    logging.info("--- Flask app creation finished ---")
+        Args:
+            e (Exception): The exception that occurred.
+
+        Returns:
+            JSON response with error details.
+        """
+        logger.error(f"Unhandled exception: {e}", exc_info=True)
+        return jsonify({
+            "error": "A server error has occurred",
+            "type": type(e).__name__,
+            "details": str(e),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }), 500
+
     return app
