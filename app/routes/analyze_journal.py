@@ -195,33 +195,44 @@ Return ONLY this JSON format:
     "Specific suggestion 3"
   ],
   "emoji": "relevant_emoji"
-}}"""
+}}
+Ensure the response is valid JSON with no additional text or errors outside the JSON structure."""
 
             response = model.generate_content(prompt)
             json_string = response.text.strip()
 
-            # Clean and parse JSON
+            # Clean and parse JSON, handling potential malformed responses
             json_string = json_string.replace("```json\n", "").replace("```", "").strip()
             if not json_string.startswith("{"):
                 json_string = "{" + json_string + "}"
-
+            
+            # Attempt to parse, removing trailing errors if present
             try:
                 result = json.loads(json_string)
-                # Validate response
-                if (
-                    isinstance(result.get("sentiment"), str) and
-                    isinstance(result.get("score"), int) and 0 <= result["score"] <= 10 and
-                    isinstance(result.get("themes"), list) and len(result["themes"]) > 0 and
-                    isinstance(result.get("insights"), str) and
-                    isinstance(result.get("suggestions"), list) and len(result["suggestions"]) == 3 and
-                    isinstance(result.get("emoji"), str)
-                ):
-                    current_app.logger.info(f"Gemini analysis successful: {json.dumps(result)[:100]}... at {datetime.now(timezone.utc).isoformat()}")
-                    return result
+            except json.JSONDecodeError as e:
+                current_app.logger.warning(f"Initial JSON parse failed: {e}, attempting to clean response")
+                # Try to extract valid JSON by removing trailing error text
+                json_start = json_string.find("{")
+                json_end = json_string.rfind("}") + 1
+                if json_start != -1 and json_end > json_start:
+                    cleaned_json = json_string[json_start:json_end]
+                    try:
+                        result = json.loads(cleaned_json)
+                    except json.JSONDecodeError as e2:
+                        current_app.logger.error(f"Failed to parse cleaned JSON response: {e2} at {datetime.now(timezone.utc).isoformat()}")
+                        return {
+                            "error": f"Failed to parse Gemini response: {str(e2)}",
+                            "sentiment": "neutral",
+                            "score": 5,
+                            "themes": ["unknown"],
+                            "insights": "Analysis failed, default values applied.",
+                            "suggestions": ["Try journaling again later.", "Reflect on your day.", "Practice self-care."],
+                            "emoji": "😐"
+                        }
                 else:
-                    current_app.logger.error(f"Invalid Gemini response format: {json_string} at {datetime.now(timezone.utc).isoformat()}")
+                    current_app.logger.error(f"Failed to parse Gemini JSON response: {e} at {datetime.now(timezone.utc).isoformat()}")
                     return {
-                        "error": "Invalid response format from Gemini",
+                        "error": f"Failed to parse Gemini response: {str(e)}",
                         "sentiment": "neutral",
                         "score": 5,
                         "themes": ["unknown"],
@@ -229,10 +240,22 @@ Return ONLY this JSON format:
                         "suggestions": ["Try journaling again later.", "Reflect on your day.", "Practice self-care."],
                         "emoji": "😐"
                     }
-            except json.JSONDecodeError as e:
-                current_app.logger.error(f"Failed to parse Gemini JSON response: {json_string}, error: {e} at {datetime.now(timezone.utc).isoformat()}")
+            
+            # Validate response
+            if (
+                isinstance(result.get("sentiment"), str) and
+                isinstance(result.get("score"), int) and 0 <= result["score"] <= 10 and
+                isinstance(result.get("themes"), list) and len(result["themes"]) > 0 and
+                isinstance(result.get("insights"), str) and
+                isinstance(result.get("suggestions"), list) and len(result["suggestions"]) == 3 and
+                isinstance(result.get("emoji"), str)
+            ):
+                current_app.logger.info(f"Gemini analysis successful: {json.dumps(result)[:100]}... at {datetime.now(timezone.utc).isoformat()}")
+                return result
+            else:
+                current_app.logger.error(f"Invalid Gemini response format: {json_string} at {datetime.now(timezone.utc).isoformat()}")
                 return {
-                    "error": f"Failed to parse Gemini response: {str(e)}",
+                    "error": "Invalid response format from Gemini",
                     "sentiment": "neutral",
                     "score": 5,
                     "themes": ["unknown"],
@@ -282,8 +305,8 @@ Return ONLY this JSON format:
                     "themes": ["unknown"],
                     "insights": "Analysis failed, default values applied.",
                     "suggestions": ["Try journaling again later.", "Reflect on your day.", "Practice self-care."],
-                                         "emoji": "😐"
-                 }
+                    "emoji": "😐"
+                }
     return {
         "error": "Max retries reached for Gemini analysis",
         "sentiment": "neutral",
@@ -566,53 +589,140 @@ def analyze_journal_by_date():
     
     try:
         max_retries = 3
+        analysis_response = None
+        # Check if analysis already exists for the date
         for attempt in range(max_retries):
             try:
-                response = supabase.table('journalEntry').select('*').eq('user_id', user_id).gte('created_at', f"{journal_date} 00:00:00+07").lte('created_at', f"{journal_date} 23:59:59+07").execute()
+                analysis_response = supabase.table('dailyanalysis').select('analysis').eq('user_id', user_id).eq('date', journal_date).execute()
                 break
-            except httpx.ReadError as e:
-                current_app.logger.warning(f"Attempt {attempt + 1}/{max_retries} failed due to ReadError: {e} at {datetime.now(timezone.utc).isoformat()}")
+            except APIError as e:
+                if '42P01' in str(e):  # Table does not exist (should not happen now)
+                    current_app.logger.warning(f"dailyanalysis table does not exist at {datetime.now(timezone.utc).isoformat()}")
+                    analysis_response = None
+                    break
+                current_app.logger.warning(f"Attempt {attempt + 1}/{max_retries} failed due to APIError: {e} at {datetime.now(timezone.utc).isoformat()}")
                 if attempt == max_retries - 1:
                     raise
-                time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+                time.sleep(2 ** attempt)
+            except httpx.ReadError as e:
+                current_app.logger.warning(f"Attempt {attempt + 1}/{max_retries} failed due to ReadError for dailyanalysis: {e} at {datetime.now(timezone.utc).isoformat()}")
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(2 ** attempt)
         else:
-            raise Exception("Max retries reached for Supabase query")
+            raise Exception("Max retries reached for Supabase dailyanalysis query")
         
-        if not response.data:
+        if analysis_response and analysis_response.data:
+            current_app.logger.info(f"Found existing analysis for user {user_id} on {journal_date} at {datetime.now(timezone.utc).isoformat()}")
+            result = analysis_response.data[0]['analysis']
+            return jsonify({"results": [result]}), 200
+        
+        # No existing analysis, proceed to check journal entries
+        for attempt in range(max_retries):
+            try:
+                journal_response = supabase.table('journalEntry').select('*').eq('user_id', user_id).gte('created_at', f"{journal_date} 00:00:00+07").lte('created_at', f"{journal_date} 23:59:59+07").execute()
+                break
+            except httpx.ReadError as e:
+                current_app.logger.warning(f"Attempt {attempt + 1}/{max_retries} failed due to ReadError for journalEntry: {e} at {datetime.now(timezone.utc).isoformat()}")
+                if attempt == max_retries - 1:
+                    raise
+                time.sleep(2 ** attempt)
+        else:
+            raise Exception("Max retries reached for Supabase journalEntry query")
+        
+        if not journal_response.data:
             current_app.logger.info(f"No journal entry found for user {user_id} on {journal_date} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify({"error": "No journal entry found for the specified date"}), 404
-        
-        # Process and re-analyze all entries for the date
-        results = []
-        for journal_entry in response.data:
-            logging.info(f"Journal entry data: {journal_entry}")  # Log the full entry to inspect structure
+            
+            # Try to fetch the latest journal entry
+            for attempt in range(max_retries):
+                try:
+                    latest_response = supabase.table('journalEntry').select('*').eq('user_id', user_id).order('created_at', desc=True).limit(1).execute()
+                    break
+                except httpx.ReadError as e:
+                    current_app.logger.warning(f"Attempt {attempt + 1}/{max_retries} failed due to ReadError for latest entry: {e} at {datetime.now(timezone.utc).isoformat()}")
+                    if attempt == max_retries - 1:
+                        raise
+                    time.sleep(2 ** attempt)
+            else:
+                raise Exception("Max retries reached for Supabase latest entry query")
+            
+            if not latest_response.data:
+                current_app.logger.info(f"No journal entries found for user {user_id} at {datetime.now(timezone.utc).isoformat()}")
+                return jsonify({
+                    "error": "No journal entries found. We need your journal to provide insights.",
+                    "message": "Please create a journal entry to receive personalized insights."
+                }), 404
+            
+            # Use the latest journal entry
+            journal_entry = latest_response.data[0]
             content = journal_entry.get('entry_text')
             questionnaire_data = journal_entry.get('questionnaire', {})
+            entry_date = datetime.fromisoformat(journal_entry.get('created_at').replace('Z', '+00:00')).date()
             
-            current_app.logger.info(f"Re-analyzing journal entry for user {user_id} on {journal_date} with journal_id {journal_entry['journal_id']} at {datetime.now(timezone.utc).isoformat()}")
+            current_app.logger.info(f"Using latest journal entry for user {user_id} from {entry_date} at {datetime.now(timezone.utc).isoformat()}")
             result = analyze_with_gemini(content, questionnaire_data, user_id, max_retries=3)
             if "error" in result:
                 current_app.logger.error(f"Analysis failed with error: {result['error']} at {datetime.now(timezone.utc).isoformat()}")
                 return jsonify(result), 500
-
-            # Save or update analysis and score
+            
+            # Save analysis to dailyanalysis if table exists
+            try:
+                supabase.table('dailyanalysis').insert({
+                    'user_id': user_id,
+                    'date': journal_date.isoformat(),
+                    'analysis': result
+                }).execute()
+            except APIError as e:
+                if '42P01' not in str(e):  # Ignore table not exists error
+                    current_app.logger.error(f"Failed to save to dailyanalysis: {e} at {datetime.now(timezone.utc).isoformat()}")
+            
+            # Update journalEntry for consistency
             entry_id = journal_entry.get('journal_id')
             if not entry_id:
-                current_app.logger.error(f"No journal_id found in journal entry: {journal_entry} at {datetime.now(timezone.utc).isoformat()}")
+                current_app.logger.error(f"No journal_id found in latest journal entry: {journal_entry} at {datetime.now(timezone.utc).isoformat()}")
                 return jsonify({"error": "Internal server error: No journal_id for update"}), 500
             supabase.table('journalEntry').update({
                 'analysis': result,
                 'score': result['score']
             }).eq('journal_id', entry_id).execute()
-            results.append(result)
-
-        if not results:
-            current_app.logger.error(f"No valid analysis results for user {user_id} on {journal_date} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify({"error": "No valid analysis results"}), 500
+            
+            result['message'] = f"No entry found for {journal_date}. Showing analysis from your latest journal on {entry_date}."
+            return jsonify({"results": [result]}), 200
         
-        # Return all results in a single response
-        current_app.logger.info(f"Successfully re-analyzed {len(results)} journal entries for user {user_id} on {journal_date} at {datetime.now(timezone.utc).isoformat()}")
-        return jsonify({"results": results}), 200
+        # Process the first journal entry for the date
+        journal_entry = journal_response.data[0]  # Take the first entry
+        content = journal_entry.get('entry_text')
+        questionnaire_data = journal_entry.get('questionnaire', {})
+        
+        current_app.logger.info(f"Analyzing journal entry for user {user_id} on {journal_date} with journal_id {journal_entry['journal_id']} at {datetime.now(timezone.utc).isoformat()}")
+        result = analyze_with_gemini(content, questionnaire_data, user_id, max_retries=3)
+        if "error" in result:
+            current_app.logger.error(f"Analysis failed with error: {result['error']} at {datetime.now(timezone.utc).isoformat()}")
+            return jsonify(result), 500
+        
+        # Save analysis to dailyanalysis if table exists
+        try:
+            supabase.table('dailyanalysis').insert({
+                'user_id': user_id,
+                'date': journal_date.isoformat(),
+                'analysis': result
+            }).execute()
+        except APIError as e:
+            if '42P01' not in str(e):  # Ignore table not exists error
+                current_app.logger.error(f"Failed to save to dailyanalysis: {e} at {datetime.now(timezone.utc).isoformat()}")
+        
+        # Update journalEntry
+        entry_id = journal_entry.get('journal_id')
+        if not entry_id:
+            current_app.logger.error(f"No journal_id found in journal entry: {journal_entry} at {datetime.now(timezone.utc).isoformat()}")
+            return jsonify({"error": "Internal server error: No journal_id for update"}), 500
+        supabase.table('journalEntry').update({
+            'analysis': result,
+            'score': result['score']
+        }).eq('journal_id', entry_id).execute()
+        
+        current_app.logger.info(f"Successfully analyzed and saved journal entry for user {user_id} on {journal_date} at {datetime.now(timezone.utc).isoformat()}")
+        return jsonify({"results": [result]}), 200
     
     except APIError as e:
         current_app.logger.error(f"Supabase API error: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
