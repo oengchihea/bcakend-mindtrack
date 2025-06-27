@@ -270,7 +270,7 @@ Ensure the response is valid JSON with no additional text or errors outside the 
                 current_app.logger.warning(f"Quota exceeded error: {api_error} at {datetime.now(timezone.utc).isoformat()}, attempt {attempt + 1}/{max_retries}")
                 if attempt == max_retries - 1:
                     return {
-                        "error": f"Failed to analyze journal with Gemini: {api_error}. You have exceeded the free tier quota (50 requests/day). Wait until 07:00 +07 on June 24, 2025, for reset or upgrade your plan. See https://ai.google.dev/gemini-api/docs/rate-limits for details.",
+                        "error": f"Failed to analyze journal with Gemini: {api_error}. You have exceeded the free tier quota (50 requests/day). Wait until 07:00 +07 on June 28, 2025, for reset or upgrade your plan. See https://ai.google.dev/gemini-api/docs/rate-limits for details.",
                         "sentiment": "neutral",
                         "score": 5,
                         "themes": ["unknown"],
@@ -761,11 +761,11 @@ def analyze_weekly_insights_endpoint():
         return jsonify({"error": "Invalid date format. Use YYYY-MM-DD."}), 400
     
     try:
-        # Fetch daily analyses for the week
-        response = supabase.table('journalEntry').select('analysis').eq('user_id', user_id).gte('created_at', f"{start_date} 00:00:00+07").lte('created_at', f"{end_date} 23:59:59+07").execute()
+        # Fetch daily analyses for the week from dailyanalysis table
+        response = supabase.table('dailyanalysis').select('analysis').eq('user_id', user_id).gte('date', start_date.isoformat()).lte('date', end_date.isoformat()).execute()
         if not response.data:
-            current_app.logger.info(f"No journal entries found for user {user_id} in week starting {start_date} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify({"error": "No journal entries found for the specified week"}), 404
+            current_app.logger.info(f"No analysis entries found for user {user_id} in week starting {start_date} at {datetime.now(timezone.utc).isoformat()}")
+            return jsonify({"error": "No analysis entries found for the specified week"}), 404
         
         insights = [entry['analysis'] for entry in response.data if entry.get('analysis')]
         if not insights:
@@ -821,11 +821,11 @@ def analyze_monthly_insights_endpoint():
         return jsonify({"error": "Invalid month format. Use YYYY-MM."}), 400
     
     try:
-        # Fetch daily analyses for the month
-        response = supabase.table('journalEntry').select('analysis').eq('user_id', user_id).gte('created_at', f"{start_date} 00:00:00+07").lte('created_at', f"{end_date} 23:59:59+07").execute()
+        # Fetch daily analyses for the month from dailyanalysis table
+        response = supabase.table('dailyanalysis').select('analysis').eq('user_id', user_id).gte('date', start_date.isoformat()).lte('date', end_date.isoformat()).execute()
         if not response.data:
-            current_app.logger.info(f"No journal entries found for user {user_id} in month {month_str} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify({"error": "No journal entries found for the specified month"}), 404
+            current_app.logger.info(f"No analysis entries found for user {user_id} in month {month_str} at {datetime.now(timezone.utc).isoformat()}")
+            return jsonify({"error": "No analysis entries found for the specified month"}), 404
         
         insights = [entry['analysis'] for entry in response.data if entry.get('analysis')]
         if not insights:
