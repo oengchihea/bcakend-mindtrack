@@ -150,19 +150,24 @@ def update_event(event_id):
             print(f"Update event error: User {user_id} is not the creator (actual creator: {event_check.data['creator_id']})")  # Debug
             return jsonify({'error': 'Only the creator can update this event'}), 403
 
-        # Prepare update data - only include provided fields
+        # Prepare update data - include all provided fields (don't skip empty strings for some fields)
         event_data = {}
-        if 'title' in data and data['title']:
-            event_data['title'] = data['title']
-        if 'description' in data:
-            event_data['description'] = data['description']
+        
+        # Required fields - only update if they have actual values
+        if 'title' in data and data['title'] and data['title'].strip():
+            event_data['title'] = data['title'].strip()
         if 'event_time' in data and data['event_time']:
             event_data['event_time'] = data['event_time']
-        if 'location' in data and data['location']:
-            event_data['location'] = data['location']
+        if 'location' in data and data['location'] and data['location'].strip():
+            event_data['location'] = data['location'].strip()
+            
+        # Optional fields - allow empty values (to clear the field)    
+        if 'description' in data:
+            event_data['description'] = data['description'].strip() if data['description'] else ""
         if 'meeting_link' in data:
-            event_data['meeting_link'] = data['meeting_link']
+            event_data['meeting_link'] = data['meeting_link'].strip() if data['meeting_link'] else None
 
+        print(f"Raw data received: {data}")  # Debug
         print(f"Filtered event data for update: {event_data}")  # Debug
 
         if not event_data:
@@ -170,8 +175,9 @@ def update_event(event_id):
 
         # Update the event
         result = current_app.supabase.table('events').update(event_data).eq('event_id', event_id).execute()
-        print(f"Update event response: {result}")  # Debug
+        print(f"Supabase update result: {result}")  # Debug
         print(f"Update result data: {result.data}")  # Debug
+        print(f"Update result count: {getattr(result, 'count', 'no count')}")  # Debug
 
         # Supabase update might return empty data but still be successful
         # Fetch the updated event to return
