@@ -75,7 +75,7 @@ def create_app():
         app.register_blueprint(analyze_bp, url_prefix='/api')
 
         from .routes.events import events_bp
-        app.register_blueprint(events_bp)
+        app.register_blueprint(events_bp, url_prefix='/api')
 
         from .routes.main import main_bp
         app.register_blueprint(main_bp, url_prefix='/api')

@@ -66,7 +66,7 @@ def fetch_user_info(user_id: str) -> Optional[Dict[str, str]]:
     try:
         user_result = current_app.supabase.table('user').select('name, profile_image_url').eq('user_id', user_id).execute()
         if user_result.data:
-            logger.debug(f"Fetched user info for {user_id}")
+            logger.debug(f"Fetched user info for {user_id}: {user_result.data[0]}")
             return user_result.data[0]
         logger.debug(f"No user found for {user_id}")
         return None
@@ -111,8 +111,9 @@ def get_user_limits():
     """
     try:
         user_id = g.user.id
+        logger.debug(f"Fetching user limits for {user_id}")
         limits_info = spam_detector.get_user_limits(user_id, current_app.supabase)
-        logger.info(f"Fetched user limits for {user_id}")
+        logger.info(f"Fetched user limits for {user_id}: {limits_info}")
         return jsonify(limits_info), 200
     except Exception as e:
         logger.error(f"Error getting user limits for {user_id}: {e}")
@@ -170,6 +171,7 @@ def create_post():
             'is_flagged': spam_score >= 50
         }
 
+        logger.debug(f"Inserting post for user {user_id}: {post_data}")
         result = current_app.supabase.table('posts').insert(post_data).execute()
         if result.data:
             created_post = result.data[0]
@@ -181,7 +183,7 @@ def create_post():
                 'post': created_post,
                 'success': True
             }), 201
-        logger.error("Failed to create post")
+        logger.error("Failed to create post: No data returned")
         return jsonify({"error": "Failed to create post", "code": "CREATE_FAILED"}), 500
     except Exception as e:
         logger.error(f"Error creating post for user {g.user.id}: {e}")
@@ -204,6 +206,7 @@ def get_all_posts():
     try:
         limit = min(request.args.get('limit', 50, type=int), 100)
         offset = request.args.get('offset', 0, type=int)
+        logger.debug(f"Fetching posts with limit={limit}, offset={offset}")
 
         posts_result = current_app.supabase.table('posts').select(
             'post_id, user_id, title, content, category, created_at, updated_at, spam_score'
@@ -245,6 +248,7 @@ def get_post(post_id: str):
         return jsonify({"error": str(e), "code": "INVALID_POST_ID"}), 400
 
     try:
+        logger.debug(f"Fetching post {post_id}")
         result = current_app.supabase.table('posts').select('*').eq('post_id', post_id).execute()
         if result.data:
             post = result.data[0]
@@ -293,6 +297,7 @@ def update_post(post_id: str):
             logger.warning("Missing request body")
             return jsonify({"error": "Request body is required", "code": "INVALID_REQUEST"}), 400
 
+        logger.debug(f"Checking if post {post_id} exists for user {user_id}")
         existing_post = current_app.supabase.table('posts').select('*').eq('post_id', post_id).eq('user_id', user_id).execute()
         if not existing_post.data:
             logger.warning(f"Post {post_id} not found or user {user_id} lacks permission")
@@ -324,6 +329,7 @@ def update_post(post_id: str):
             logger.warning("No valid fields to update")
             return jsonify({"error": "At least one valid field (title, content, category) required", "code": "INVALID_DATA"}), 400
 
+        logger.debug(f"Updating post {post_id} with data: {update_data}")
         result = current_app.supabase.table('posts').update(update_data).eq('post_id', post_id).eq('user_id', user_id).execute()
         if result.data:
             logger.info(f"Updated post {post_id} for user {user_id}")
@@ -332,7 +338,7 @@ def update_post(post_id: str):
                 'post': result.data[0],
                 'success': True
             }), 200
-        logger.error(f"Failed to update post {post_id}")
+        logger.error(f"Failed to update post {post_id}: No data returned")
         return jsonify({"error": "Failed to update post", "code": "UPDATE_FAILED"}), 500
     except Exception as e:
         logger.error(f"Error updating post {post_id}: {e}")
@@ -358,6 +364,7 @@ def delete_post(post_id: str):
 
     try:
         user_id = g.user.id
+        logger.debug(f"Checking if post {post_id} exists for user {user_id}")
         existing_post = current_app.supabase.table('posts').select('*').eq('post_id', post_id).eq('user_id', user_id).execute()
         if not existing_post.data:
             logger.warning(f"Post {post_id} not found or user {user_id} lacks permission")
@@ -376,7 +383,7 @@ def delete_post(post_id: str):
                 'message': 'Post deleted successfully',
                 'success': True
             }), 200
-        logger.error(f"Failed to delete post {post_id}")
+        logger.error(f"Failed to delete post {post_id}: No data returned")
         return jsonify({"error": "Failed to delete post", "code": "DELETE_FAILED"}), 500
     except Exception as e:
         logger.error(f"Error deleting post {post_id}: {e}")
@@ -399,6 +406,7 @@ def get_my_posts():
         user_id = g.user.id
         limit = min(request.args.get('limit', 50, type=int), 100)
         offset = request.args.get('offset', 0, type=int)
+        logger.debug(f"Fetching posts for user {user_id} with limit={limit}, offset={offset}")
 
         result = current_app.supabase.table('posts').select('*').eq('user_id', user_id).order('created_at', desc=True).range(offset, offset + limit - 1).execute()
         user_info = fetch_user_info(user_id)
@@ -436,11 +444,13 @@ def get_comments(post_id: str):
         return jsonify({"error": str(e), "code": "INVALID_POST_ID"}), 400
 
     try:
+        logger.debug(f"Checking if post {post_id} exists")
         post_result = current_app.supabase.table('posts').select('post_id').eq('post_id', post_id).execute()
         if not post_result.data:
             logger.warning(f"Post {post_id} not found")
             return jsonify({"error": "Post not found", "code": "NOT_FOUND"}), 404
 
+        logger.debug(f"Fetching comments for post {post_id}")
         result = current_app.supabase.table('comments').select('*').eq('post_id', post_id).eq('is_flagged', False).order('created_at', desc=True).execute()
         comments_with_user_info = []
         for comment in result.data:
@@ -488,6 +498,7 @@ def create_comment(post_id: str):
             logger.warning("Missing comment text")
             return jsonify({"error": "Comment text is required", "code": "MISSING_TEXT"}), 400
 
+        logger.debug(f"Checking if post {post_id} exists")
         post_result = current_app.supabase.table('posts').select('post_id').eq('post_id', post_id).execute()
         if not post_result.data:
             logger.warning(f"Post {post_id} not found")
@@ -514,6 +525,7 @@ def create_comment(post_id: str):
             'is_flagged': spam_score >= 50
         }
 
+        logger.debug(f"Inserting comment for post {post_id}: {comment_data}")
         result = current_app.supabase.table('comments').insert(comment_data).execute()
         if result.data:
             created_comment = result.data[0]
@@ -525,7 +537,7 @@ def create_comment(post_id: str):
                 'comment': created_comment,
                 'success': True
             }), 201
-        logger.error(f"Failed to create comment for post {post_id}")
+        logger.error(f"Failed to create comment for post {post_id}: No data returned")
         return jsonify({"error": "Failed to create comment", "code": "CREATE_FAILED"}), 500
     except Exception as e:
         logger.error(f"Error creating comment for post {post_id}: {e}")
@@ -562,6 +574,7 @@ def update_comment(post_id: str, comment_id: str):
             logger.warning("Missing comment text")
             return jsonify({"error": "Comment text is required", "code": "MISSING_TEXT"}), 400
 
+        logger.debug(f"Checking if comment {comment_id} exists for user {user_id}")
         existing_comment = current_app.supabase.table('comments').select('*').eq('id', comment_id).eq('user_id', user_id).eq('post_id', post_id).execute()
         if not existing_comment.data:
             logger.warning(f"Comment {comment_id} not found or user {user_id} lacks permission")
@@ -583,6 +596,7 @@ def update_comment(post_id: str, comment_id: str):
             'is_flagged': spam_score >= 50
         }
 
+        logger.debug(f"Updating comment {comment_id} with data: {update_data}")
         result = current_app.supabase.table('comments').update(update_data).eq('id', comment_id).eq('user_id', user_id).execute()
         if result.data:
             logger.info(f"Updated comment {comment_id} for post {post_id} by user {user_id}")
@@ -591,7 +605,7 @@ def update_comment(post_id: str, comment_id: str):
                 'comment': result.data[0],
                 'success': True
             }), 200
-        logger.error(f"Failed to update comment {comment_id}")
+        logger.error(f"Failed to update comment {comment_id}: No data returned")
         return jsonify({"error": "Failed to update comment", "code": "UPDATE_FAILED"}), 500
     except Exception as e:
         logger.error(f"Error updating comment {comment_id}: {e}")
@@ -619,6 +633,7 @@ def delete_comment(post_id: str, comment_id: str):
 
     try:
         user_id = g.user.id
+        logger.debug(f"Checking if comment {comment_id} exists for user {user_id}")
         existing_comment = current_app.supabase.table('comments').select('*').eq('id', comment_id).eq('user_id', user_id).eq('post_id', post_id).execute()
         if not existing_comment.data:
             logger.warning(f"Comment {comment_id} not found or user {user_id} lacks permission")
@@ -655,12 +670,15 @@ def get_stats():
     """
     try:
         user_id = g.user.id
+        logger.debug(f"Fetching stats for user {user_id}")
         posts_result = current_app.supabase.table('posts').select('post_id', count='exact').eq('user_id', user_id).execute()
         posts_count = posts_result.count if posts_result.count else 0
+        logger.debug(f"Posts count for user {user_id}: {posts_count}")
 
         try:
             comments_result = current_app.supabase.table('comments').select('id', count='exact').eq('user_id', user_id).execute()
             comments_count = comments_result.count if comments_result.count else 0
+            logger.debug(f"Comments count for user {user_id}: {comments_count}")
         except Exception as e:
             logger.warning(f"Failed to get comment count for user {user_id}: {e}")
             comments_count = 0

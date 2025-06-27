@@ -58,10 +58,10 @@ def auth_required(f: Callable) -> Callable:
 
         try:
             token = auth_header.split(' ')[1]
+            logger.debug(f"Validating token: {token[:20]}... (length: {len(token)})")
             if hasattr(supabase_client, 'postgrest'):
                 supabase_client.postgrest.auth(token)
             user_response = supabase_client.auth.get_user(token)
-
             if not user_response or not user_response.user:
                 if hasattr(supabase_client, 'postgrest'):
                     supabase_client.postgrest.auth(None)
@@ -75,8 +75,8 @@ def auth_required(f: Callable) -> Callable:
         except Exception as e:
             if hasattr(supabase_client, 'postgrest'):
                 supabase_client.postgrest.auth(None)
-            logger.error(f"Token verification failed: {e}")
-            return jsonify({"error": "Token verification failed", "code": "TOKEN_VERIFICATION_FAILED", "details": str(e)}), 401
+            logger.error(f"Token verification failed: {e}, Token: {token[:20]}...")
+            return jsonify({"error": "Token verification failed", "code": "TOKEN_VERIFICATION_FAILED", "details": str(e)}), 500  # Changed to 500 for server errors
     return decorated_function
 
 def validate_email(email: str) -> bool:

@@ -4,43 +4,14 @@ from datetime import datetime, timezone
 import uuid
 import logging
 from typing import Callable
+from app.routes.auth import auth_required
 
 # Initialize logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # Initialize Blueprint
-events_bp = Blueprint('events', __name__, url_prefix='/api/events')
-
-def auth_required(f: Callable) -> Callable:
-    """Decorator to ensure user authentication for event routes."""
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        supabase = getattr(current_app, 'supabase', None)
-        if not supabase:
-            logger.error("No Supabase client available")
-            return jsonify({"error": "Database connection not available", "code": "NO_SUPABASE"}), 500
-
-        auth_header = request.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('Bearer '):
-            logger.warning("Missing or invalid Authorization header")
-            return jsonify({"error": "Authorization required", "code": "AUTH_HEADER_MISSING"}), 401
-
-        try:
-            token = auth_header.split(' ')[1]
-            supabase.auth.set_session(token, token)
-            user = supabase.auth.get_user(token)
-            if not user.user:
-                logger.warning("Invalid token")
-                return jsonify({"error": "Invalid token", "code": "INVALID_TOKEN"}), 401
-            g.current_user = user.user
-            g.access_token = token
-            logger.info(f"Authenticated user {g.current_user.id}")
-            return f(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"Authentication failed: {e}")
-            return jsonify({"error": "Authentication failed", "code": "AUTH_FAILED", "details": str(e)}), 401
-    return decorated
+events_bp = Blueprint('events', __name__, url_prefix='/events')
 
 @events_bp.route('/', methods=['GET'])
 @auth_required
@@ -76,7 +47,7 @@ def get_event_by_id(event_id: str):
 def get_my_events():
     """Retrieve events created by the authenticated user."""
     try:
-        user_id = g.current_user.id
+        user_id = g.user.id
         limit = min(request.args.get('limit', 50, type=int), 100)
         offset = request.args.get('offset', 0, type=int)
         result = current_app.supabase.from_('events').select('*, user!inner(name)').eq('creator_id', user_id).order('event_time').range(offset, offset + limit - 1).execute()
@@ -96,7 +67,7 @@ def create_event():
             logger.warning("Missing required fields")
             return jsonify({"error": "Title is required", "code": "MISSING_FIELDS"}), 400
 
-        user_id = g.current_user.id
+        user_id = g.user.id
         event_data = {
             'creator_id': user_id,
             'title': data['title'][:255],
@@ -122,7 +93,7 @@ def create_event():
 def update_event(event_id: str):
     """Update an existing event (only by creator)."""
     try:
-        user_id = g.current_user.id
+        user_id = g.user.id
         data = request.get_json()
         if not data:
             logger.warning("Missing request body")
@@ -161,7 +132,7 @@ def update_event(event_id: str):
 def delete_event(event_id: str):
     """Delete an event and its registrations (only by creator)."""
     try:
-        user_id = g.current_user.id
+        user_id = g.user.id
         event_check = current_app.supabase.from_('events').select('creator_id').eq('event_id', event_id).single().execute()
         if not event_check.data:
             logger.warning(f"Event {event_id} not found")
@@ -187,7 +158,7 @@ def register_to_event():
     """Register a user for an event."""
     try:
         data = request.get_json()
-        user_id = g.current_user.id
+        user_id = g.user.id
         event_id = data.get('event_id')
         if not event_id:
             logger.warning("Missing event_id")
