@@ -56,6 +56,43 @@ def handle_journal_entries():
             current_app.logger.error(f"Error on DELETE: {e} at %s", datetime.now(timezone.utc).isoformat(), exc_info=True)
             return jsonify({"error": "Failed to delete entries"}), 500
 
+@journal_bp.route('/journal/entries/<journal_id>', methods=['DELETE'])
+@auth_required
+def delete_journal_entry(journal_id):
+    """Delete a specific journal entry by journal_id"""
+    current_app.logger.info(f"Route /api/journal/entries/{journal_id} hit with DELETE method at {datetime.now(timezone.utc).isoformat()}")
+    user_id = g.user.id
+
+    # Get the service client for RLS-bypassed operations
+    service_client = get_service_client()
+    if not service_client:
+        return jsonify({"error": "Server configuration error. Cannot delete data."}), 500
+
+    try:
+        # First, verify the journal entry exists and belongs to the user
+        check_result = current_app.supabase.table("journalEntry").select("journal_id, user_id").eq("journal_id", journal_id).eq("user_id", user_id).execute()
+        
+        if not check_result.data:
+            current_app.logger.warning(f"Journal entry {journal_id} not found or doesn't belong to user {user_id}")
+            return jsonify({"error": "Journal entry not found or you don't have permission to delete it"}), 404
+
+        # Delete the journal entry using service client to bypass RLS
+        delete_result = service_client.table("journalEntry").delete().eq("journal_id", journal_id).eq("user_id", user_id).execute()
+        
+        if delete_result.data:
+            current_app.logger.info(f"Successfully deleted journal entry {journal_id} for user {user_id}")
+            return jsonify({"message": "Journal entry deleted successfully", "deleted_id": journal_id}), 200
+        else:
+            current_app.logger.error(f"Failed to delete journal entry {journal_id} - no data returned")
+            return jsonify({"error": "Failed to delete journal entry"}), 500
+
+    except APIError as e:
+        current_app.logger.error(f"Supabase API Error on DELETE: {e.message} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
+        return jsonify({"error": f"Database error: {e.message}"}), 500
+    except Exception as e:
+        current_app.logger.error(f"Error deleting journal entry {journal_id}: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
+        return jsonify({"error": "Failed to delete journal entry"}), 500
+
 @journal_bp.route('/journalEntry', methods=['POST', 'PUT'])
 @auth_required
 def save_journal_entry():
