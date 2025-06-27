@@ -6,23 +6,133 @@ from flask import Blueprint, request, jsonify, current_app, g
 from supabase import create_client, Client
 from postgrest import APIError
 from .auth import auth_required
-import google.generativeai as genai
 import httpx
 import time
 from dotenv import load_dotenv
-from google.api_core import exceptions
 
 # Load environment variables
 load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable is not set")
-genai.configure(api_key=GEMINI_API_KEY)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY_V2") or os.getenv("GEMINI_API_KEY_V1") or os.getenv("GEMINI_API_KEY")
+
+# Try to import google.generativeai, but make it optional
+try:
+    import google.generativeai as genai
+    from google.api_core import exceptions
+    GEMINI_IMPORT_AVAILABLE = True
+except ImportError:
+    GEMINI_IMPORT_AVAILABLE = False
+    genai = None
+    exceptions = None
+    logging.warning("google-generativeai not installed, using fallback analysis only")
+
+# Try to configure Gemini AI, but make it optional
+try:
+    if GEMINI_API_KEY and GEMINI_IMPORT_AVAILABLE:
+        genai.configure(api_key=GEMINI_API_KEY)
+        GEMINI_AVAILABLE = True
+    else:
+        GEMINI_AVAILABLE = False
+        logging.warning("GEMINI_API_KEY not available or google-generativeai not installed, using fallback analysis")
+except Exception as e:
+    logging.error(f"Failed to configure Gemini AI: {e}")
+    GEMINI_AVAILABLE = False
 
 analyze_bp = Blueprint('analyze_bp', __name__)
 MODEL_NAME = "gemini-1.5-flash-latest"
 
+def generate_fallback_analysis(content, questionnaire_data, user_id):
+    """Generate fallback analysis when Gemini AI is not available"""
+    try:
+        # Simple keyword-based sentiment analysis
+        content_lower = (content or "").lower()
+        positive_words = ["happy", "good", "great", "excellent", "amazing", "wonderful", "grateful", "thankful", "joy", "love", "excited", "proud"]
+        negative_words = ["sad", "bad", "terrible", "awful", "angry", "frustrated", "worried", "anxious", "stressed", "upset", "disappointed"]
+        
+        positive_count = sum(1 for word in positive_words if word in content_lower)
+        negative_count = sum(1 for word in negative_words if word in content_lower)
+        
+        if positive_count > negative_count:
+            sentiment = "positive"
+            score = min(8, 5 + positive_count)
+        elif negative_count > positive_count:
+            sentiment = "negative" 
+            score = max(2, 5 - negative_count)
+        else:
+            sentiment = "neutral"
+            score = 5
+            
+        # Extract themes based on content
+        themes = []
+        if any(word in content_lower for word in ["work", "job", "office", "meeting"]):
+            themes.append("work")
+        if any(word in content_lower for word in ["stress", "anxious", "worried", "pressure"]):
+            themes.append("stress")
+        if any(word in content_lower for word in ["grateful", "thankful", "appreciate", "blessing"]):
+            themes.append("gratitude")
+        if any(word in content_lower for word in ["family", "friend", "relationship", "love"]):
+            themes.append("relationships")
+        if any(word in content_lower for word in ["tired", "exhausted", "sleep", "energy"]):
+            themes.append("energy")
+            
+        if not themes:
+            themes = ["reflection"]
+            
+        # Generate appropriate insights and suggestions
+        if sentiment == "positive":
+            insights = "Your journal entry reflects a positive mindset and emotional well-being."
+            suggestions = [
+                "Continue practicing gratitude to maintain your positive outlook.",
+                "Share your positive energy with others around you.",
+                "Reflect on what specifically contributed to these good feelings."
+            ]
+            emoji = "😊"
+        elif sentiment == "negative":
+            insights = "Your journal entry indicates some challenges or difficult emotions."
+            suggestions = [
+                "Consider talking to someone you trust about these feelings.",
+                "Practice self-care activities that usually help you feel better.",
+                "Remember that difficult emotions are temporary and will pass."
+            ]
+            emoji = "😔"
+        else:
+            insights = "Your journal entry shows a balanced emotional state."
+            suggestions = [
+                "Take time to reflect on what brings you joy and fulfillment.",
+                "Consider setting small goals to add more positive experiences to your day.",
+                "Practice mindfulness to stay present and aware of your emotions."
+            ]
+            emoji = "😐"
+            
+        return {
+            "sentiment": sentiment,
+            "score": score,
+            "themes": themes,
+            "insights": insights,
+            "suggestions": suggestions,
+            "emoji": emoji,
+            "fallback": True,
+            "message": "Analysis generated using fallback method (Gemini AI unavailable)"
+        }
+        
+    except Exception as e:
+        logging.error(f"Error in fallback analysis: {e}")
+        return {
+            "sentiment": "neutral",
+            "score": 5,
+            "themes": ["unknown"],
+            "insights": "Fallback analysis failed, default values applied.",
+            "suggestions": ["Try journaling again later.", "Reflect on your day.", "Practice self-care."],
+            "emoji": "😐",
+            "fallback": True,
+            "error": f"Fallback analysis error: {str(e)}"
+        }
+
 def analyze_with_gemini(content, questionnaire_data, user_id, max_retries=3):
+    # Check if Gemini is available
+    if not GEMINI_AVAILABLE:
+        current_app.logger.warning(f"Gemini AI not available for user {user_id}, using fallback analysis")
+        return generate_fallback_analysis(content, questionnaire_data, user_id)
+    
     attempt = 0
     while attempt < max_retries:
         try:
@@ -45,35 +155,47 @@ def analyze_with_gemini(content, questionnaire_data, user_id, max_retries=3):
             )
 
             prompt = f"""
-Analyze the following journal entry for sentiment and emotional well-being:
-- Content: {content or 'No content provided'}
-- Questionnaire Data: {json.dumps(questionnaire_data or {})}
-- User ID: {user_id}
+You are an expert emotional well-being analyst. Carefully analyze this journal entry and provide an accurate assessment:
 
-Return a JSON object with:
-- sentiment: (e.g., "positive", "neutral", "negative")
-- score: (integer between 0 and 10, reflecting emotional well-being)
-- themes: (array of strings, e.g., ["stress", "gratitude"], must be non-empty)
-- insights: (brief string summarizing the journal's emotional content)
-- suggestions: (array of three strings with tailored suggestions to improve or maintain well-being)
-- emoji: (string with a relevant emoji)
+JOURNAL CONTENT: "{content or 'No content provided'}"
+QUESTIONNAIRE DATA: {json.dumps(questionnaire_data or {})}
 
-Example:
+ANALYSIS INSTRUCTIONS:
+1. SENTIMENT: Determine if the overall emotional tone is "positive", "negative", or "neutral"
+2. SCORE: Rate emotional well-being from 0-10 where:
+   - 0-2: Severe distress (depression, grief, trauma, suicidal thoughts)
+   - 3-4: Significant emotional difficulties (very sad, anxious, angry, overwhelmed)
+   - 5-6: Mild emotional challenges or neutral state (slight sadness, minor stress, okay)
+   - 7-8: Good emotional state (happy, content, grateful, motivated)
+   - 9-10: Excellent emotional well-being (joy, euphoria, deep peace, amazing day)
+
+3. THEMES: Identify specific emotional themes (e.g., "grief", "anxiety", "gratitude", "loneliness", "excitement", "stress", "love", "anger")
+
+4. INSIGHTS: Provide empathetic understanding of their emotional state
+
+5. SUGGESTIONS: Give 3 specific, actionable suggestions based on their emotional state
+
+IMPORTANT SCORING GUIDELINES:
+- If they mention sadness, loss, grief, depression: Score 2-4
+- If they mention anxiety, worry, stress: Score 3-5  
+- If they mention anger, frustration: Score 3-5
+- If they mention neutral/okay feelings: Score 5-6
+- If they mention happiness, gratitude, excitement: Score 7-9
+- If they mention extreme joy, amazing day, love: Score 9-10
+
+Return ONLY this JSON format:
 {{
-  "sentiment": "positive",
-  "score": 8,
-  "themes": ["gratitude", "joy"],
-  "insights": "Your journal reflects a positive mood with strong themes of gratitude.",
+  "sentiment": "negative|neutral|positive",
+  "score": integer_0_to_10,
+  "themes": ["theme1", "theme2"],
+  "insights": "Your understanding of their emotional state",
   "suggestions": [
-    "Continue noting things you're grateful for to maintain positivity.",
-    "Share your positive mood with others through kind acts.",
-    "Reflect on what made today joyful to replicate it."
+    "Specific suggestion 1",
+    "Specific suggestion 2", 
+    "Specific suggestion 3"
   ],
-  "emoji": "😊"
-}}
-
-Ensure 'score' is an integer between 0 and 10, 'themes' is non-empty, and 'suggestions' contains exactly three items.
-"""
+  "emoji": "relevant_emoji"
+}}"""
 
             response = model.generate_content(prompt)
             json_string = response.text.strip()
@@ -118,45 +240,50 @@ Ensure 'score' is an integer between 0 and 10, 'themes' is non-empty, and 'sugge
                     "suggestions": ["Try journaling again later.", "Reflect on your day.", "Practice self-care."],
                     "emoji": "😐"
                 }
-        except exceptions.ResourceExhausted as e:
-            current_app.logger.warning(f"Quota exceeded error: {e} at {datetime.now(timezone.utc).isoformat()}, attempt {attempt + 1}/{max_retries}")
-            if attempt == max_retries - 1:
+        except Exception as api_error:
+            # Handle various Gemini API errors more broadly since exceptions module might not be available
+            error_str = str(api_error).lower()
+            if "quota" in error_str or "resourceexhausted" in error_str:
+                current_app.logger.warning(f"Quota exceeded error: {api_error} at {datetime.now(timezone.utc).isoformat()}, attempt {attempt + 1}/{max_retries}")
+                if attempt == max_retries - 1:
+                    return {
+                        "error": f"Failed to analyze journal with Gemini: {api_error}. You have exceeded the free tier quota (50 requests/day). Wait until 07:00 +07 on June 24, 2025, for reset or upgrade your plan. See https://ai.google.dev/gemini-api/docs/rate-limits for details.",
+                        "sentiment": "neutral",
+                        "score": 5,
+                        "themes": ["unknown"],
+                        "insights": "Analysis failed due to quota limit.",
+                        "suggestions": ["Wait for quota reset.", "Consider a paid plan.", "Check usage at https://ai.google.dev/gemini-api/docs/rate-limits."],
+                        "emoji": "😐"
+                    }
+                retry_delay = getattr(api_error, 'retry_delay', None)
+                wait_time = retry_delay.seconds if retry_delay and hasattr(retry_delay, 'seconds') else 2 ** attempt
+                current_app.logger.info(f"Retrying after {wait_time} seconds due to quota limit at {datetime.now(timezone.utc).isoformat()}")
+                time.sleep(wait_time)
+                attempt += 1
+                continue
+            elif "invalid" in error_str and ("key" in error_str or "argument" in error_str):
+                current_app.logger.error(f"API key error: {api_error} at {datetime.now(timezone.utc).isoformat()}")
                 return {
-                    "error": f"Failed to analyze journal with Gemini: {e}. You have exceeded the free tier quota (50 requests/day). Wait until 07:00 +07 on June 24, 2025, for reset or upgrade your plan. See https://ai.google.dev/gemini-api/docs/rate-limits for details.",
+                    "error": f"Failed to analyze journal with Gemini: {api_error}. The API key is invalid or expired. Renew it at https://aistudio.google.com/app/apikey.",
                     "sentiment": "neutral",
                     "score": 5,
                     "themes": ["unknown"],
-                    "insights": "Analysis failed due to quota limit.",
-                    "suggestions": ["Wait for quota reset.", "Consider a paid plan.", "Check usage at https://ai.google.dev/gemini-api/docs/rate-limits."],
+                    "insights": "Analysis failed due to an invalid API key.",
+                    "suggestions": ["Renew your API key.", "Update GEMINI_API_KEY in .env.", "Retry after updating."],
                     "emoji": "😐"
                 }
-            retry_delay = getattr(e, 'retry_delay', None)
-            wait_time = retry_delay.seconds if retry_delay and hasattr(retry_delay, 'seconds') else 2 ** attempt
-            current_app.logger.info(f"Retrying after {wait_time} seconds due to quota limit at {datetime.now(timezone.utc).isoformat()}")
-            time.sleep(wait_time)
-            attempt += 1
-        except exceptions.InvalidArgument as e:
-            current_app.logger.error(f"API key error: {e} at {datetime.now(timezone.utc).isoformat()}")
-            return {
-                "error": f"Failed to analyze journal with Gemini: {e}. The API key is invalid or expired. Renew it at https://aistudio.google.com/app/apikey.",
-                "sentiment": "neutral",
-                "score": 5,
-                "themes": ["unknown"],
-                "insights": "Analysis failed due to an invalid API key.",
-                "suggestions": ["Renew your API key.", "Update GEMINI_API_KEY in .env.", "Retry after updating."],
-                "emoji": "😐"
-            }
-        except Exception as e:
-            current_app.logger.error(f"Error in analyze_with_gemini: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
-            return {
-                "error": f"Failed to analyze journal with Gemini: {str(e)}",
-                "sentiment": "neutral",
-                "score": 5,
-                "themes": ["unknown"],
-                "insights": "Analysis failed, default values applied.",
-                "suggestions": ["Try journaling again later.", "Reflect on your day.", "Practice self-care."],
-                "emoji": "😐"
-            }
+            else:
+                # Handle as general exception and break out of retry loop
+                current_app.logger.error(f"Error in analyze_with_gemini: {api_error} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
+                return {
+                    "error": f"Failed to analyze journal with Gemini: {str(api_error)}",
+                    "sentiment": "neutral",
+                    "score": 5,
+                    "themes": ["unknown"],
+                    "insights": "Analysis failed, default values applied.",
+                    "suggestions": ["Try journaling again later.", "Reflect on your day.", "Practice self-care."],
+                                         "emoji": "😐"
+                 }
     return {
         "error": "Max retries reached for Gemini analysis",
         "sentiment": "neutral",
@@ -312,6 +439,105 @@ def analyze_monthly_insights(insights, user_id):
             "insight": "Monthly analysis failed, default values applied.",
             "suggestions": []
         }
+
+@analyze_bp.route('/analyze-journal', methods=['POST'])
+@auth_required
+def analyze_journal():
+    """
+    Analyze journal content in real-time without saving to database.
+    This is used by the frontend during journal submission.
+    """
+    current_app.logger.info(f"Route /api/analyze-journal hit with method POST at {datetime.now(timezone.utc).isoformat()}")
+    
+    user_id = g.user.id
+    data = request.get_json()
+    
+    if not data:
+        current_app.logger.warning(f"No data provided in request at {datetime.now(timezone.utc).isoformat()}")
+        return jsonify({
+            "error": "Request body is required",
+            "fallback": True,
+            "sentiment": "neutral",
+            "score": 5,
+            "themes": ["unknown"],
+            "insights": "No content provided for analysis.",
+            "suggestions": [
+                "Try writing about your current feelings",
+                "Share what's on your mind",
+                "Reflect on your day"
+            ],
+            "emoji": "😐"
+        }), 400
+    
+    content = data.get('content', '')
+    questionnaire_data = data.get('questionnaireData', {})
+    
+    if not content:
+        current_app.logger.warning(f"No content provided for analysis at {datetime.now(timezone.utc).isoformat()}")
+        return jsonify({
+            "error": "Content is required for analysis",
+            "fallback": True,
+            "sentiment": "neutral",
+            "score": 5,
+            "themes": ["unknown"],
+            "insights": "No journal content provided.",
+            "suggestions": [
+                "Start by writing about your day",
+                "Share what you're feeling right now",
+                "Describe a moment that stood out"
+            ],
+            "emoji": "😐"
+        }), 400
+    
+    try:
+        current_app.logger.info(f"Analyzing journal content for user {user_id} at {datetime.now(timezone.utc).isoformat()}")
+        
+        # First try with Gemini
+        result = analyze_with_gemini(content, questionnaire_data, user_id, max_retries=2)
+        
+        # Check for quota exceeded error
+        if "error" in result and ("quota" in result["error"].lower() or "429" in result["error"]):
+            current_app.logger.warning(f"Gemini quota exceeded, using fallback analysis for user {user_id}")
+            
+            # Generate fallback analysis
+            fallback_result = generate_fallback_analysis(content, questionnaire_data, user_id)
+            
+            # Add quota warning to the response
+            fallback_result.update({
+                "quota_exceeded": True,
+                "quota_message": "AI analysis temporarily unavailable due to quota limits. Using simplified analysis.",
+                "retry_after": "Please try again in a few minutes."
+            })
+            
+            return jsonify(fallback_result), 200
+        
+        # Check for other errors
+        elif "error" in result:
+            current_app.logger.error(f"Analysis failed with error: {result['error']} at {datetime.now(timezone.utc).isoformat()}")
+            
+            # Generate fallback analysis
+            fallback_result = generate_fallback_analysis(content, questionnaire_data, user_id)
+            fallback_result.update({
+                "original_error": result["error"],
+                "fallback_message": "Using simplified analysis due to temporary AI service disruption."
+            })
+            
+            return jsonify(fallback_result), 200
+        
+        current_app.logger.info(f"Successfully analyzed journal content for user {user_id} at {datetime.now(timezone.utc).isoformat()}")
+        return jsonify(result), 200
+    
+    except Exception as e:
+        current_app.logger.error(f"Error analyzing journal content: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
+        
+        # Generate fallback analysis
+        fallback_result = generate_fallback_analysis(content, questionnaire_data, user_id)
+        fallback_result.update({
+            "error": f"An unexpected error occurred: {str(e)}",
+            "fallback_message": "Using simplified analysis due to technical difficulties."
+        })
+        
+        return jsonify(fallback_result), 200
 
 @analyze_bp.route('/analyze-journal-by-date', methods=['POST'])
 @auth_required
