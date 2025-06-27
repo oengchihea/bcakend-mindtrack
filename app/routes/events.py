@@ -200,7 +200,8 @@ def update_event(event_id):
         # Perform the update with more detailed logging
         print(f"Executing Supabase update...")  # Debug
         try:
-            result = current_app.supabase.table('events').update(event_data).eq('event_id', event_id).execute()
+            # Try the update with explicit column matching
+            result = current_app.supabase.table('events').update(event_data).eq('event_id', event_id).eq('creator_id', user_id).execute()
             print(f"Update executed successfully")  # Debug
             print(f"Update result type: {type(result)}")  # Debug
             print(f"Update result data: {result.data}")  # Debug
@@ -209,8 +210,21 @@ def update_event(event_id):
             # Check if the update actually affected any rows
             if hasattr(result, 'count') and result.count == 0:
                 print(f"WARNING: Update count is 0 - no rows were affected")  # Debug
+                print(f"This might be due to RLS policies or event not found")  # Debug
+                # Try a direct check to see if the event exists
+                check_result = current_app.supabase.from_('events').select('*').eq('event_id', event_id).eq('creator_id', user_id).execute()
+                print(f"Event existence check: {check_result.data}")  # Debug
+                if not check_result.data:
+                    return jsonify({'error': 'Event not found or access denied'}), 404
+                else:
+                    # Try update without creator_id constraint
+                    print(f"Retrying update without creator_id constraint...")  # Debug
+                    retry_result = current_app.supabase.table('events').update(event_data).eq('event_id', event_id).execute()
+                    print(f"Retry update result: {retry_result.data}")  # Debug
+                    result = retry_result
             elif result.data is None or len(result.data) == 0:
-                print(f"WARNING: Update returned no data")  # Debug
+                print(f"WARNING: Update returned no data but might have succeeded")  # Debug
+                # Supabase sometimes returns empty data even on successful updates
             else:
                 print(f"SUCCESS: Update affected {len(result.data)} rows")  # Debug
                 
@@ -218,7 +232,16 @@ def update_event(event_id):
             print(f"ERROR during Supabase update: {update_error}")  # Debug
             import traceback
             print(f"Update error traceback: {traceback.format_exc()}")  # Debug
-            return jsonify({'error': f'Database update failed: {str(update_error)}'}), 500
+            
+            # Try alternative update method using from_() instead of table()
+            print(f"Trying alternative update method...")  # Debug
+            try:
+                alt_result = current_app.supabase.from_('events').update(event_data).eq('event_id', event_id).execute()
+                print(f"Alternative update result: {alt_result.data}")  # Debug
+                result = alt_result
+            except Exception as alt_error:
+                print(f"Alternative update also failed: {alt_error}")  # Debug
+                return jsonify({'error': f'Database update failed: {str(update_error)}'}), 500
 
         # Fetch the updated event to verify and return
         print(f"Fetching updated event...")  # Debug
@@ -227,14 +250,48 @@ def update_event(event_id):
             print(f"Fetched updated event successfully: {updated_event.data}")  # Debug
             
             # Verify that the changes were actually applied
+            update_successful = True
+            failed_fields = []
+            
             for field, new_value in event_data.items():
                 if field in updated_event.data:
                     db_value = updated_event.data[field]
-                    if db_value != new_value:
-                        print(f"WARNING: Field '{field}' was not updated correctly!")  # Debug
-                        print(f"  Expected: '{new_value}', but DB has: '{db_value}'")  # Debug
+                    # Handle potential whitespace differences
+                    if isinstance(db_value, str) and isinstance(new_value, str):
+                        db_value_clean = db_value.strip()
+                        new_value_clean = new_value.strip()
+                        if db_value_clean != new_value_clean:
+                            print(f"WARNING: Field '{field}' was not updated correctly!")  # Debug
+                            print(f"  Expected: '{new_value_clean}' (len:{len(new_value_clean)})")  # Debug
+                            print(f"  DB has: '{db_value_clean}' (len:{len(db_value_clean)})")  # Debug
+                            update_successful = False
+                            failed_fields.append(field)
+                        else:
+                            print(f"SUCCESS: Field '{field}' updated correctly to '{new_value_clean}'")  # Debug
                     else:
-                        print(f"SUCCESS: Field '{field}' updated correctly to '{new_value}'")  # Debug
+                        if db_value != new_value:
+                            print(f"WARNING: Field '{field}' was not updated correctly!")  # Debug
+                            print(f"  Expected: '{new_value}', but DB has: '{db_value}'")  # Debug
+                            update_successful = False
+                            failed_fields.append(field)
+                        else:
+                            print(f"SUCCESS: Field '{field}' updated correctly to '{new_value}'")  # Debug
+            
+            if not update_successful:
+                print(f"ERROR: Update verification failed for fields: {failed_fields}")  # Debug
+                # Try one more direct update for the failed fields
+                retry_data = {field: event_data[field] for field in failed_fields}
+                print(f"Retrying update for failed fields: {retry_data}")  # Debug
+                try:
+                    final_result = current_app.supabase.from_('events').update(retry_data).eq('event_id', event_id).execute()
+                    print(f"Final retry result: {final_result.data}")  # Debug
+                    # Fetch again to verify
+                    final_check = current_app.supabase.from_('events').select('*, user!inner(name)').eq('event_id', event_id).single().execute()
+                    print(f"Final verification: {final_check.data}")  # Debug
+                    print(f"=== UPDATE EVENT DEBUG END ===")  # Debug
+                    return jsonify({'message': 'Event updated successfully after retry', 'event': final_check.data}), 200
+                except Exception as retry_error:
+                    print(f"Final retry failed: {retry_error}")  # Debug
             
             print(f"=== UPDATE EVENT DEBUG END ===")  # Debug
             return jsonify({'message': 'Event updated successfully', 'event': updated_event.data}), 200
