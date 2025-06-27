@@ -8,11 +8,23 @@ import time
 from typing import Dict, Any, Optional, List
 import os
 from app.routes.auth import auth_required
+import google.generativeai as genai
+from google.api_core import exceptions
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY environment variable is not set")
+genai.configure(api_key=GEMINI_API_KEY)
 
 mood_bp = Blueprint('mood', __name__)
 
 # UUID validation regex
 uuid_regex = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+
+MODEL_NAME = "gemini-1.5-flash-latest"
 
 def _validate_user_id(user_id):
     """Validate user ID - allow test IDs during development"""
@@ -33,14 +45,10 @@ def _validate_user_id(user_id):
     return True
 
 class MoodAnalyzer:
-    """Enhanced mood analysis class with Gemini AI-first approach"""
+    """Enhanced mood analysis class with direct Gemini AI approach"""
     
     def __init__(self):
-        self.ai_base_url = "https://ai-mindtrack.vercel.app"
-        self.ai_api_url = f"{self.ai_base_url}/api/analyze-data"
-        self.ai_api_key = os.getenv('AI_SERVICE_API_KEY', '')
         self.max_retries = 3
-        self.timeout = 45
         self.use_ai_first = True
     
     def analyze_mood(self, content: str, questionnaire_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -48,11 +56,11 @@ class MoodAnalyzer:
         
         for attempt in range(self.max_retries):
             print(f'🤖 Gemini AI Analysis attempt {attempt + 1}/{self.max_retries}')
-            ai_result = self._call_gemini_ai_api(content, questionnaire_data)
+            ai_result = self._call_gemini_direct(content, questionnaire_data, attempt)
             
             if ai_result and self._is_valid_analysis(ai_result):
                 print(f'✅ Gemini AI analysis successful on attempt {attempt + 1} with score: {ai_result.get("score")}')
-                ai_result['source'] = 'gemini-ai-api'
+                ai_result['source'] = 'gemini-direct'
                 ai_result['attempt'] = attempt + 1
                 return ai_result
             
@@ -66,67 +74,105 @@ class MoodAnalyzer:
         local_result['ai_attempts'] = self.max_retries
         return local_result
     
-    def _call_gemini_ai_api(self, content: str, questionnaire_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _call_gemini_direct(self, content: str, questionnaire_data: Dict[str, Any], attempt: int) -> Optional[Dict[str, Any]]:
         try:
+            print(f'🌐 Initializing Gemini model: {MODEL_NAME}')
+            model = genai.GenerativeModel(
+                model_name=MODEL_NAME,
+                generation_config={
+                    "temperature": 0.7,
+                    "top_k": 40,
+                    "top_p": 0.9,
+                    "max_output_tokens": 300
+                },
+                safety_settings=[
+                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
+                ]
+            )
+
             mood_scale = self._extract_mood_scale(questionnaire_data)
             mood_word = self._extract_mood_word(questionnaire_data)
             positive_experience = self._extract_positive_experience(questionnaire_data)
             affecting_factor = self._extract_concerns(questionnaire_data)
-        
-            user_data = {
-                "feeling": str(mood_scale),
-                "moodWord": mood_word or "neutral",
-                "positiveExperience": positive_experience or "",
-                "affectingFactor": affecting_factor or "",
-                "responseStyle": "Use 'you' language - speak directly to the user in second person"
-            }
-        
-            payload = {
-                "userData": user_data,
-                "analysisType": "immediate-mood"
-            }
-        
-            headers = {
-                'Content-Type': 'application/json',
-                'User-Agent': 'MindTrack-Enhanced/2.0',
-                'Accept': 'application/json'
-            }
-        
-            if self.ai_api_key:
-                headers['Authorization'] = f'Bearer {self.ai_api_key}'
-                headers['X-API-Key'] = self.ai_api_key
-        
-            print(f'🌐 Calling Gemini AI API: {self.ai_api_url}')
-            print(f'📊 Payload: feeling={mood_scale}, moodWord={mood_word}, analysisType=immediate-mood')
-        
-            response = requests.post(
-                self.ai_api_url,
-                json=payload,
-                headers=headers,
-                timeout=self.timeout,
-                verify=True
-            )
-        
-            print(f'📊 Gemini AI Response: {response.status_code}')
-        
-            if response.status_code == 200:
-                result = response.json()
-                print(f'✅ Gemini AI success: {list(result.keys())}')
-            
-                transformed_result = self._transform_gemini_response(result)
-                return transformed_result
-            else:
-                print(f'❌ Gemini AI error {response.status_code}: {response.text}')
+
+            prompt = self._create_comprehensive_prompt(content, mood_scale, mood_word, positive_experience, affecting_factor)
+            print(f'📊 Sending prompt to Gemini, attempt {attempt + 1}/{self.max_retries}')
+
+            response = model.generate_content(prompt)
+            json_string = response.text.strip()
+
+            # Clean and parse JSON
+            json_string = json_string.replace("```json\n", "").replace("```", "").strip()
+            if not json_string.startswith("{"):
+                json_string = "{" + json_string + "}"
+
+            try:
+                result = json.loads(json_string)
+                # Validate response
+                if (
+                    isinstance(result.get("score"), (int, float)) and 0 <= result["score"] <= 10 and
+                    isinstance(result.get("emoji"), str) and
+                    isinstance(result.get("sentiment"), str) and
+                    isinstance(result.get("insights"), str) and
+                    isinstance(result.get("suggestions"), list) and len(result["suggestions"]) == 4 and
+                    isinstance(result.get("themes"), list) and len(result["themes"]) > 0 and
+                    isinstance(result.get("confidence"), (int, float)) and 0 <= result["confidence"] <= 1 and
+                    isinstance(result.get("mood_category"), str) and
+                    isinstance(result.get("intensity"), str)
+                ):
+                    print(f'✅ Gemini response validated: score={result["score"]}, sentiment={result["sentiment"]}')
+                    return result
+                else:
+                    print(f'❌ Invalid Gemini response format: {json_string}')
+                    return None
+            except json.JSONDecodeError as e:
+                print(f'❌ Failed to parse Gemini JSON response: {json_string}, error: {e}')
                 return None
-            
-        except requests.exceptions.Timeout:
-            print(f'⏰ Gemini AI timeout after {self.timeout}s')
+        except exceptions.ResourceExhausted as e:
+            print(f'⏰ Quota exceeded error: {e}, attempt {attempt + 1}/{self.max_retries}')
+            if attempt == self.max_retries - 1:
+                return {
+                    "error": f"Failed to analyze mood with Gemini: {e}. You have exceeded the free tier quota (50 requests/day). Wait until 07:00 +07 on June 28, 2025, for reset or upgrade your plan. See https://ai.google.dev/gemini-api/docs/rate-limits for details.",
+                    "score": 5.0,
+                    "emoji": "😐",
+                    "sentiment": "neutral",
+                    "insights": "Analysis failed due to quota limit.",
+                    "suggestions": [
+                        "Wait for quota reset.",
+                        "Consider a paid plan.",
+                        "Check usage at https://ai.google.dev/gemini-api/docs/rate-limits.",
+                        "Try again later."
+                    ],
+                    "themes": ["unknown"],
+                    "confidence": 0.0,
+                    "mood_category": "unknown",
+                    "intensity": "low"
+                }
             return None
-        except requests.exceptions.ConnectionError:
-            print('🌐 Gemini AI connection error')
-            return None
+        except exceptions.InvalidArgument as e:
+            print(f'❌ API key error: {e}')
+            return {
+                "error": f"Failed to analyze mood with Gemini: {e}. The API key is invalid or expired. Renew it at https://aistudio.google.com/app/apikey.",
+                "score": 5.0,
+                "emoji": "😐",
+                "sentiment": "neutral",
+                "insights": "Analysis failed due to an invalid API key.",
+                "suggestions": [
+                    "Renew your API key.",
+                    "Update GEMINI_API_KEY in .env.",
+                    "Retry after updating.",
+                    "Contact support if needed."
+                ],
+                "themes": ["unknown"],
+                "confidence": 0.0,
+                "mood_category": "unknown",
+                "intensity": "low"
+            }
         except Exception as e:
-            print(f'❌ Gemini AI exception: {str(e)}')
+            print(f'❌ Error in Gemini analysis: {e}')
             return None
     
     def _create_comprehensive_prompt(self, content: str, mood_scale: int, mood_word: str, 
@@ -135,7 +181,7 @@ class MoodAnalyzer:
 You are an empathetic AI mood analyzer. Analyze this mood journal entry and provide a structured JSON response.
 
 JOURNAL ENTRY:
-{content}
+{content or 'No content provided'}
 
 MOOD SELF-RATING: {mood_scale}/10
 MOOD WORD: {mood_word or 'Not specified'}
@@ -147,7 +193,7 @@ Respond with ONLY a JSON object in this exact format:
     "score": [float between 0-10],
     "emoji": "[single emoji representing mood]",
     "sentiment": "[very negative/negative/slightly negative/neutral/slightly positive/positive/very positive]",
-    "insights": "[2-3 sentences of personalized insights]",
+    "insights": "[2-3 sentences of personalized insights using 'you' language]",
     "suggestions": ["suggestion1", "suggestion2", "suggestion3", "suggestion4"],
     "themes": ["theme1", "theme2", "theme3"],
     "confidence": [float between 0-1],
@@ -155,7 +201,7 @@ Respond with ONLY a JSON object in this exact format:
     "intensity": "[low/medium/high]"
 }}
 
-Be empathetic, supportive, and provide actionable suggestions.
+Be empathetic, supportive, and provide actionable suggestions. Use 'you' language to address the user directly.
 """
         return prompt
     
@@ -206,55 +252,37 @@ Be empathetic, supportive, and provide actionable suggestions.
     
     def _transform_gemini_response(self, gemini_result: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            if 'analysis' in gemini_result:
-                analysis_data = gemini_result['analysis']
-            else:
-                analysis_data = gemini_result
-        
-            score = analysis_data.get('score', 3)
-            emoji_text = analysis_data.get('emoji', 'neutral')
-            insights = analysis_data.get('insights', '')
-        
-            converted_score = ((score - 1) / 4) * 10
-            converted_score = max(0.0, min(10.0, converted_score))
-        
-            emoji_map = {
-                'sad': '😢',
-                'slightly_sad': '😔',
-                'neutral': '😐',
-                'slightly_happy': '🙂',
-                'happy': '😊'
-            }
-            emoji = emoji_map.get(emoji_text, '😐')
-        
-            sentiment = self._get_sentiment_from_score(converted_score)
-        
-            suggestions = self._generate_suggestions(converted_score, {})
-            themes = ['mood_analysis']
-        
-            if not insights or len(insights.strip()) < 20:
-                insights = self._generate_insights(converted_score, '', {})
-            else:
-                insights = self._convert_to_second_person(insights)
-        
+            score = gemini_result.get('score', 5.0)
+            emoji = gemini_result.get('emoji', '😐')
+            sentiment = gemini_result.get('sentiment', 'neutral')
+            insights = gemini_result.get('insights', 'No insights provided.')
+            suggestions = gemini_result.get('suggestions', [
+                "Try again later.",
+                "Reflect on your day.",
+                "Practice self-care.",
+                "Contact support if needed."
+            ])
+            themes = gemini_result.get('themes', ['mood_analysis'])
+            confidence = gemini_result.get('confidence', 0.95)
+            mood_category = gemini_result.get('mood_category', 'neutral')
+            intensity = gemini_result.get('intensity', 'low')
+
             transformed = {
-                'score': round(converted_score, 1),
+                'score': round(float(score), 1),
                 'emoji': emoji,
                 'sentiment': sentiment,
                 'insights': insights,
                 'suggestions': suggestions[:4],
                 'themes': themes,
-                'confidence': 0.95,
-                'mood_category': self._get_mood_category_from_score(converted_score),
-                'intensity': self._get_intensity_from_score(converted_score),
-                'source': 'gemini-ai-api',
+                'confidence': confidence,
+                'mood_category': mood_category,
+                'intensity': intensity,
+                'source': 'gemini-direct',
                 'timestamp': datetime.utcnow().isoformat(),
-                'original_response': gemini_result,
-                'api_score': score,
-                'api_emoji': emoji_text
+                'original_response': gemini_result
             }
         
-            print(f'✅ Transformed Gemini response: API Score {score} -> Our Score {converted_score}, Sentiment {sentiment}')
+            print(f'✅ Transformed Gemini response: Score {score}, Sentiment {sentiment}')
             return transformed
         
         except Exception as e:
