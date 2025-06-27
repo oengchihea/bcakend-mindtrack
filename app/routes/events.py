@@ -133,36 +133,63 @@ def update_event(event_id):
         user_id = g.current_user.id
         data = request.get_json()
         print(f"Update event data: {data}")  # Debug
+        print(f"Update event - user_id: {user_id}, event_id: {event_id}")  # Debug
+
+        # Validate request data
+        if not data:
+            return jsonify({'error': 'Request body is required'}), 400
 
         # Verify event exists and user is creator
         event_check = current_app.supabase.from_('events').select('creator_id').eq('event_id', event_id).single().execute()
+        print(f"Event check result: {event_check.data}")  # Debug
+        
         if not event_check.data:
             print(f"Update event error: Event ID {event_id} not found")  # Debug
             return jsonify({'error': 'Event not found'}), 404
         if event_check.data['creator_id'] != user_id:
-            print(f"Update event error: User {user_id} is not the creator")  # Debug
+            print(f"Update event error: User {user_id} is not the creator (actual creator: {event_check.data['creator_id']})")  # Debug
             return jsonify({'error': 'Only the creator can update this event'}), 403
 
-        event_data = {
-            'title': data.get('title'),
-            'description': data.get('description'),
-            'event_time': data.get('event_time'),
-            'location': data.get('location'),
-            'meeting_link': data.get('meeting_link'),
-        }
-        # Remove None values
-        event_data = {k: v for k, v in event_data.items() if v is not None}
+        # Prepare update data - only include provided fields
+        event_data = {}
+        if 'title' in data and data['title']:
+            event_data['title'] = data['title']
+        if 'description' in data:
+            event_data['description'] = data['description']
+        if 'event_time' in data and data['event_time']:
+            event_data['event_time'] = data['event_time']
+        if 'location' in data and data['location']:
+            event_data['location'] = data['location']
+        if 'meeting_link' in data:
+            event_data['meeting_link'] = data['meeting_link']
 
+        print(f"Filtered event data for update: {event_data}")  # Debug
+
+        if not event_data:
+            return jsonify({'error': 'No valid fields provided for update'}), 400
+
+        # Update the event
         result = current_app.supabase.table('events').update(event_data).eq('event_id', event_id).execute()
-        print(f"Update event response: {result.data}")  # Debug
+        print(f"Update event response: {result}")  # Debug
+        print(f"Update result data: {result.data}")  # Debug
 
-        if result.data:
+        # Supabase update might return empty data but still be successful
+        # Fetch the updated event to return
+        try:
             updated_event = current_app.supabase.from_('events').select('*, user!inner(name)').eq('event_id', event_id).single().execute()
+            print(f"Fetched updated event: {updated_event.data}")  # Debug
             return jsonify({'message': 'Event updated successfully', 'event': updated_event.data}), 200
-        return jsonify({'error': 'Failed to update event'}), 500
+        except Exception as fetch_error:
+            print(f"Error fetching updated event with user info: {fetch_error}")  # Debug
+            # Fallback: fetch without user info
+            updated_event_fallback = current_app.supabase.from_('events').select('*').eq('event_id', event_id).single().execute()
+            return jsonify({'message': 'Event updated successfully', 'event': updated_event_fallback.data}), 200
+
     except Exception as e:
         print(f"Update event error: {str(e)}")  # Debug
-        return jsonify({'error': str(e)}), 500
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")  # Debug
+        return jsonify({'error': f'Failed to update event: {str(e)}'}), 500
 
 @events_bp.route('/delete/<string:event_id>', methods=['DELETE'])
 @auth_required
