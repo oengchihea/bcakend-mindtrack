@@ -8,6 +8,7 @@ from app.routes.auth import auth_required
 from app.middleware.spam_middleware import spam_protection
 from app.services.auto_spam_detector_service import spam_detector
 import bleach
+import os
 
 # Initialize logging
 logger = logging.getLogger(__name__)
