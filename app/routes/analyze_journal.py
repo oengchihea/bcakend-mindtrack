@@ -51,15 +51,23 @@ def generate_fallback_analysis(content, questionnaire_data, user_id):
         positive_count = sum(1 for word in positive_words if word in content_lower)
         negative_count = sum(1 for word in negative_words if word in content_lower)
         
-        if positive_count > negative_count:
+        # Incorporate questionnaire data for sentiment
+        feeling_score = 5
+        if questionnaire_data and 'feeling_scale' in questionnaire_data:
+            try:
+                feeling_score = int(questionnaire_data['feeling_scale'])
+            except (ValueError, TypeError):
+                pass
+        
+        if positive_count > negative_count or feeling_score >= 7:
             sentiment = "positive"
-            score = min(8, 5 + positive_count)
-        elif negative_count > positive_count:
-            sentiment = "negative" 
-            score = max(2, 5 - negative_count)
+            score = min(8, 5 + positive_count + (feeling_score - 5))
+        elif negative_count > positive_count or feeling_score <= 4:
+            sentiment = "negative"
+            score = max(2, 5 - negative_count - (5 - feeling_score))
         else:
             sentiment = "neutral"
-            score = 5
+            score = feeling_score
             
         # Extract themes based on content
         themes = []
@@ -111,7 +119,7 @@ def generate_fallback_analysis(content, questionnaire_data, user_id):
             "suggestions": suggestions,
             "emoji": emoji,
             "fallback": True,
-            "message": "Analysis generated using fallback method (Gemini AI unavailable)"
+            "message": "Analysis generated using fallback method due to AI service unavailability"
         }
         
     except Exception as e:
@@ -264,20 +272,13 @@ Ensure the response is valid JSON with no additional text or errors outside the 
                     "emoji": "😐"
                 }
         except Exception as api_error:
-            # Handle various Gemini API errors more broadly since exceptions module might not be available
+            # Handle various Gemini API errors more broadly
             error_str = str(api_error).lower()
             if "quota" in error_str or "resourceexhausted" in error_str:
                 current_app.logger.warning(f"Quota exceeded error: {api_error} at {datetime.now(timezone.utc).isoformat()}, attempt {attempt + 1}/{max_retries}")
                 if attempt == max_retries - 1:
-                    return {
-                        "error": f"Failed to analyze journal with Gemini: {api_error}. You have exceeded the free tier quota (50 requests/day). Wait until 07:00 +07 on June 28, 2025, for reset or upgrade your plan. See https://ai.google.dev/gemini-api/docs/rate-limits for details.",
-                        "sentiment": "neutral",
-                        "score": 5,
-                        "themes": ["unknown"],
-                        "insights": "Analysis failed due to quota limit.",
-                        "suggestions": ["Wait for quota reset.", "Consider a paid plan.", "Check usage at https://ai.google.dev/gemini-api/docs/rate-limits."],
-                        "emoji": "😐"
-                    }
+                    current_app.logger.warning(f"Gemini quota exceeded, using fallback analysis for user {user_id}")
+                    return generate_fallback_analysis(content, questionnaire_data, user_id)
                 retry_delay = getattr(api_error, 'retry_delay', None)
                 wait_time = retry_delay.seconds if retry_delay and hasattr(retry_delay, 'seconds') else 2 ** attempt
                 current_app.logger.info(f"Retrying after {wait_time} seconds due to quota limit at {datetime.now(timezone.utc).isoformat()}")
@@ -296,7 +297,6 @@ Ensure the response is valid JSON with no additional text or errors outside the 
                     "emoji": "😐"
                 }
             else:
-                # Handle as general exception and break out of retry loop
                 current_app.logger.error(f"Error in analyze_with_gemini: {api_error} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
                 return {
                     "error": f"Failed to analyze journal with Gemini: {str(api_error)}",
@@ -307,15 +307,7 @@ Ensure the response is valid JSON with no additional text or errors outside the 
                     "suggestions": ["Try journaling again later.", "Reflect on your day.", "Practice self-care."],
                     "emoji": "😐"
                 }
-    return {
-        "error": "Max retries reached for Gemini analysis",
-        "sentiment": "neutral",
-        "score": 5,
-        "themes": ["unknown"],
-        "insights": "Analysis failed after max retries, please try again later.",
-        "suggestions": ["Try again later.", "Check your internet connection.", "Contact support if needed."],
-        "emoji": "😐"
-    }
+    return generate_fallback_analysis(content, questionnaire_data, user_id)
 
 def analyze_weekly_insights(insights, user_id):
     try:
@@ -329,6 +321,21 @@ def analyze_weekly_insights(insights, user_id):
         scores = [entry["score"] for entry in insights]
         sentiments = [entry["sentiment"] for entry in insights]
         avg_score = sum(scores) / len(scores) if scores else 5
+        
+        # Aggregate daily scores by date for graph
+        daily_scores = {}
+        for entry in insights:
+            date = entry.get("date")
+            if date:
+                if date not in daily_scores:
+                    daily_scores[date] = []
+                daily_scores[date].append(entry["score"])
+        
+        # Compute average score per date
+        daily_avg_scores = {
+            date: sum(scores) / len(scores) if scores else 5
+            for date, scores in daily_scores.items()
+        }
         
         # Determine dominant sentiment
         sentiment_counts = {
@@ -377,7 +384,8 @@ def analyze_weekly_insights(insights, user_id):
             "dominant_sentiment": dominant_sentiment,
             "themes": unique_themes,
             "insight": insight,
-            "suggestions": suggestions
+            "suggestions": suggestions,
+            "daily_avg_scores": daily_avg_scores
         }
     except Exception as e:
         current_app.logger.error(f"Error in analyze_weekly_insights: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
@@ -387,7 +395,8 @@ def analyze_weekly_insights(insights, user_id):
             "dominant_sentiment": "neutral",
             "themes": [],
             "insight": "Weekly analysis failed, default values applied.",
-            "suggestions": []
+            "suggestions": [],
+            "daily_avg_scores": {}
         }
 
 def analyze_monthly_insights(insights, user_id):
@@ -402,6 +411,21 @@ def analyze_monthly_insights(insights, user_id):
         scores = [entry["score"] for entry in insights]
         sentiments = [entry["sentiment"] for entry in insights]
         avg_score = sum(scores) / len(scores) if scores else 5
+        
+        # Aggregate daily scores by date for graph
+        daily_scores = {}
+        for entry in insights:
+            date = entry.get("date")
+            if date:
+                if date not in daily_scores:
+                    daily_scores[date] = []
+                daily_scores[date].append(entry["score"])
+        
+        # Compute average score per date
+        daily_avg_scores = {
+            date: sum(scores) / len(scores) if scores else 5
+            for date, scores in daily_scores.items()
+        }
         
         # Determine dominant sentiment
         sentiment_counts = {
@@ -450,7 +474,8 @@ def analyze_monthly_insights(insights, user_id):
             "dominant_sentiment": dominant_sentiment,
             "themes": unique_themes,
             "insight": insight,
-            "suggestions": suggestions
+            "suggestions": suggestions,
+            "daily_avg_scores": daily_avg_scores
         }
     except Exception as e:
         current_app.logger.error(f"Error in analyze_monthly_insights: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
@@ -460,7 +485,8 @@ def analyze_monthly_insights(insights, user_id):
             "dominant_sentiment": "neutral",
             "themes": [],
             "insight": "Monthly analysis failed, default values applied.",
-            "suggestions": []
+            "suggestions": [],
+            "daily_avg_scores": {}
         }
 
 @analyze_bp.route('/analyze-journal', methods=['POST'])
@@ -589,35 +615,8 @@ def analyze_journal_by_date():
     
     try:
         max_retries = 3
-        analysis_response = None
-        # Check if analysis already exists for the date
-        for attempt in range(max_retries):
-            try:
-                analysis_response = supabase.table('dailyanalysis').select('analysis').eq('user_id', user_id).eq('date', journal_date).execute()
-                break
-            except APIError as e:
-                if '42P01' in str(e):  # Table does not exist (should not happen now)
-                    current_app.logger.warning(f"dailyanalysis table does not exist at {datetime.now(timezone.utc).isoformat()}")
-                    analysis_response = None
-                    break
-                current_app.logger.warning(f"Attempt {attempt + 1}/{max_retries} failed due to APIError: {e} at {datetime.now(timezone.utc).isoformat()}")
-                if attempt == max_retries - 1:
-                    raise
-                time.sleep(2 ** attempt)
-            except httpx.ReadError as e:
-                current_app.logger.warning(f"Attempt {attempt + 1}/{max_retries} failed due to ReadError for dailyanalysis: {e} at {datetime.now(timezone.utc).isoformat()}")
-                if attempt == max_retries - 1:
-                    raise
-                time.sleep(2 ** attempt)
-        else:
-            raise Exception("Max retries reached for Supabase dailyanalysis query")
-        
-        if analysis_response and analysis_response.data:
-            current_app.logger.info(f"Found existing analysis for user {user_id} on {journal_date} at {datetime.now(timezone.utc).isoformat()}")
-            result = analysis_response.data[0]['analysis']
-            return jsonify({"results": [result]}), 200
-        
-        # No existing analysis, proceed to check journal entries
+        # Fetch journal entries for the date
+        journal_response = None
         for attempt in range(max_retries):
             try:
                 journal_response = supabase.table('journalEntry').select('*').eq('user_id', user_id).gte('created_at', f"{journal_date} 00:00:00+07").lte('created_at', f"{journal_date} 23:59:59+07").execute()
@@ -633,96 +632,68 @@ def analyze_journal_by_date():
         if not journal_response.data:
             current_app.logger.info(f"No journal entry found for user {user_id} on {journal_date} at {datetime.now(timezone.utc).isoformat()}")
             
-            # Try to fetch the latest journal entry
-            for attempt in range(max_retries):
-                try:
-                    latest_response = supabase.table('journalEntry').select('*').eq('user_id', user_id).order('created_at', desc=True).limit(1).execute()
-                    break
-                except httpx.ReadError as e:
-                    current_app.logger.warning(f"Attempt {attempt + 1}/{max_retries} failed due to ReadError for latest entry: {e} at {datetime.now(timezone.utc).isoformat()}")
-                    if attempt == max_retries - 1:
-                        raise
-                    time.sleep(2 ** attempt)
-            else:
-                raise Exception("Max retries reached for Supabase latest entry query")
+            # Provide default AI analysis encouraging journaling
+            content = "No journal entry provided for this date."
+            questionnaire_data = {}
+            result = analyze_with_gemini(content, questionnaire_data, user_id, max_retries=3)
+            if "error" in result:
+                current_app.logger.error(f"Default analysis failed with error: {result['error']} at {datetime.now(timezone.utc).isoformat()}")
+                return jsonify(result), 500
             
-            if not latest_response.data:
-                current_app.logger.info(f"No journal entries found for user {user_id} at {datetime.now(timezone.utc).isoformat()}")
-                return jsonify({
-                    "error": "No journal entries found. We need your journal to provide insights.",
-                    "message": "Please create a journal entry to receive personalized insights."
-                }), 404
-            
-            # Use the latest journal entry
-            journal_entry = latest_response.data[0]
+            result.update({
+                "message": f"No journal entry found for {journal_date}. Please write a journal entry to receive personalized insights.",
+                "redirect": "/journal/write",
+                "average_score": result["score"]
+            })
+            return jsonify({"results": [result]}), 200
+        
+        # Always re-analyze all journal entries for the date
+        results = []
+        for journal_entry in journal_response.data:
             content = journal_entry.get('entry_text')
             questionnaire_data = journal_entry.get('questionnaire', {})
-            entry_date = datetime.fromisoformat(journal_entry.get('created_at').replace('Z', '+00:00')).date()
             
-            current_app.logger.info(f"Using latest journal entry for user {user_id} from {entry_date} at {datetime.now(timezone.utc).isoformat()}")
+            current_app.logger.info(f"Analyzing journal entry for user {user_id} on {journal_date} with journal_id {journal_entry['journal_id']} at {datetime.now(timezone.utc).isoformat()}")
             result = analyze_with_gemini(content, questionnaire_data, user_id, max_retries=3)
+            result["date"] = journal_date.isoformat()
             if "error" in result:
                 current_app.logger.error(f"Analysis failed with error: {result['error']} at {datetime.now(timezone.utc).isoformat()}")
                 return jsonify(result), 500
             
-            # Save analysis to dailyanalysis if table exists
+            # Update or insert analysis in dailyanalysis table
             try:
+                # Delete existing analysis for this user and date to avoid duplicates
+                supabase.table('dailyanalysis').delete().eq('user_id', user_id).eq('date', journal_date).execute()
                 supabase.table('dailyanalysis').insert({
                     'user_id': user_id,
                     'date': journal_date.isoformat(),
                     'analysis': result
                 }).execute()
             except APIError as e:
-                if '42P01' not in str(e):  # Ignore table not exists error
+                if '42P01' not in str(e):
                     current_app.logger.error(f"Failed to save to dailyanalysis: {e} at {datetime.now(timezone.utc).isoformat()}")
             
-            # Update journalEntry for consistency
+            # Update journalEntry
             entry_id = journal_entry.get('journal_id')
             if not entry_id:
-                current_app.logger.error(f"No journal_id found in latest journal entry: {journal_entry} at {datetime.now(timezone.utc).isoformat()}")
+                current_app.logger.error(f"No journal_id found in journal entry: {journal_entry} at {datetime.now(timezone.utc).isoformat()}")
                 return jsonify({"error": "Internal server error: No journal_id for update"}), 500
             supabase.table('journalEntry').update({
                 'analysis': result,
                 'score': result['score']
             }).eq('journal_id', entry_id).execute()
             
-            result['message'] = f"No entry found for {journal_date}. Showing analysis from your latest journal on {entry_date}."
-            return jsonify({"results": [result]}), 200
+            results.append(result)
         
-        # Process the first journal entry for the date
-        journal_entry = journal_response.data[0]  # Take the first entry
-        content = journal_entry.get('entry_text')
-        questionnaire_data = journal_entry.get('questionnaire', {})
+        # Calculate average score for the day
+        scores = [result['score'] for result in results if 'score' in result]
+        avg_score = sum(scores) / len(scores) if scores else 5
         
-        current_app.logger.info(f"Analyzing journal entry for user {user_id} on {journal_date} with journal_id {journal_entry['journal_id']} at {datetime.now(timezone.utc).isoformat()}")
-        result = analyze_with_gemini(content, questionnaire_data, user_id, max_retries=3)
-        if "error" in result:
-            current_app.logger.error(f"Analysis failed with error: {result['error']} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify(result), 500
-        
-        # Save analysis to dailyanalysis if table exists
-        try:
-            supabase.table('dailyanalysis').insert({
-                'user_id': user_id,
-                'date': journal_date.isoformat(),
-                'analysis': result
-            }).execute()
-        except APIError as e:
-            if '42P01' not in str(e):  # Ignore table not exists error
-                current_app.logger.error(f"Failed to save to dailyanalysis: {e} at {datetime.now(timezone.utc).isoformat()}")
-        
-        # Update journalEntry
-        entry_id = journal_entry.get('journal_id')
-        if not entry_id:
-            current_app.logger.error(f"No journal_id found in journal entry: {journal_entry} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify({"error": "Internal server error: No journal_id for update"}), 500
-        supabase.table('journalEntry').update({
-            'analysis': result,
-            'score': result['score']
-        }).eq('journal_id', entry_id).execute()
-        
-        current_app.logger.info(f"Successfully analyzed and saved journal entry for user {user_id} on {journal_date} at {datetime.now(timezone.utc).isoformat()}")
-        return jsonify({"results": [result]}), 200
+        current_app.logger.info(f"Successfully analyzed {len(results)} journal entries for user {user_id} on {journal_date} at {datetime.now(timezone.utc).isoformat()}")
+        return jsonify({
+            "results": results,
+            "average_score": avg_score
+        }), 200
     
     except APIError as e:
         current_app.logger.error(f"Supabase API error: {e} at {datetime.now(timezone.utc).isoformat()}", exc_info=True)
@@ -762,15 +733,26 @@ def analyze_weekly_insights_endpoint():
     
     try:
         # Fetch daily analyses for the week from dailyanalysis table
-        response = supabase.table('dailyanalysis').select('analysis').eq('user_id', user_id).gte('date', start_date.isoformat()).lte('date', end_date.isoformat()).execute()
+        response = supabase.table('dailyanalysis').select('analysis, date').eq('user_id', user_id).gte('date', start_date.isoformat()).lte('date', end_date.isoformat()).execute()
         if not response.data:
             current_app.logger.info(f"No analysis entries found for user {user_id} in week starting {start_date} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify({"error": "No analysis entries found for the specified week"}), 404
+            return jsonify({
+                "error": "No journal entries found for the specified week",
+                "message": "Please write journal entries to receive weekly insights.",
+                "redirect": "/journal/write"
+            }), 404
         
-        insights = [entry['analysis'] for entry in response.data if entry.get('analysis')]
+        insights = [
+            {**entry['analysis'], "date": entry['date']}
+            for entry in response.data if entry.get('analysis')
+        ]
         if not insights:
             current_app.logger.warning(f"No valid analysis data found for user {user_id} in week starting {start_date} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify({"error": "No valid analysis data available for the week"}), 400
+            return jsonify({
+                "error": "No valid analysis data available for the week",
+                "message": "Please write journal entries to receive weekly insights.",
+                "redirect": "/journal/write"
+            }), 400
         
         current_app.logger.info(f"Analyzing {len(insights)} daily analyses for user {user_id} for week starting {start_date} at {datetime.now(timezone.utc).isoformat()}")
         weekly_analysis = analyze_weekly_insights(insights, user_id)
@@ -822,15 +804,26 @@ def analyze_monthly_insights_endpoint():
     
     try:
         # Fetch daily analyses for the month from dailyanalysis table
-        response = supabase.table('dailyanalysis').select('analysis').eq('user_id', user_id).gte('date', start_date.isoformat()).lte('date', end_date.isoformat()).execute()
+        response = supabase.table('dailyanalysis').select('analysis, date').eq('user_id', user_id).gte('date', start_date.isoformat()).lte('date', end_date.isoformat()).execute()
         if not response.data:
             current_app.logger.info(f"No analysis entries found for user {user_id} in month {month_str} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify({"error": "No analysis entries found for the specified month"}), 404
+            return jsonify({
+                "error": "No journal entries found for the specified month",
+                "message": "Please write journal entries to receive monthly insights.",
+                "redirect": "/journal/write"
+            }), 404
         
-        insights = [entry['analysis'] for entry in response.data if entry.get('analysis')]
+        insights = [
+            {**entry['analysis'], "date": entry['date']}
+            for entry in response.data if entry.get('analysis')
+        ]
         if not insights:
             current_app.logger.warning(f"No valid analysis data found for user {user_id} in month {month_str} at {datetime.now(timezone.utc).isoformat()}")
-            return jsonify({"error": "No valid analysis data available for the month"}), 400
+            return jsonify({
+                "error": "No valid analysis data available for the month",
+                "message": "Please write journal entries to receive monthly insights.",
+                "redirect": "/journal/write"
+            }), 400
         
         current_app.logger.info(f"Analyzing {len(insights)} daily analyses for user {user_id} for month {month_str} at {datetime.now(timezone.utc).isoformat()}")
         monthly_analysis = analyze_monthly_insights(insights, user_id)
